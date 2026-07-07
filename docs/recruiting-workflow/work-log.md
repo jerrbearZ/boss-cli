@@ -40,3 +40,31 @@
 - Add SQLite-backed candidate state tracking.
 - Add configurable JD matching rules and approved message templates.
 - Add tests using mocked Boss CLI/API responses before enabling live actions.
+
+## 2026-07-08: Boss Dry-Run Runner
+
+### Process
+
+- Added a new `boss workflow dry-run` command under the existing Click CLI.
+- Kept the first runner read-only: it reads recruiter inbox data, candidate details, last messages, and optionally chat history.
+- Left full resume viewing behind an explicit `--fetch-resume` flag because the existing recruiter workflow notes that profile viewing can trigger candidate-facing "viewed" notifications.
+- Disabled browser cookie extraction by default for dry-run automation; the command uses saved credentials or `BOSS_COOKIES` unless `--allow-browser-auth` is explicitly passed.
+- Added a JSON rules-file example for the effect-commerce/business-development use case.
+
+### Results
+
+- `boss workflow dry-run` can classify candidates as `matched`, `needs_review`, or `rejected`.
+- The command reports `sent_messages=0` and marks every candidate with `would_send_message=false`.
+- A default keyword rule set is embedded, and a configurable example exists at `docs/recruiting-workflow/examples/boss-dry-run-rules.json`.
+
+### Verification
+
+- Added unit tests for command registration, classification, rules-file validity, and the no-send/no-resume default behavior.
+- Live dry-run execution still depends on valid Boss authentication cookies.
+- A first live dry-run attempt was interrupted after producing no output because no saved credential existed and automatic browser cookie extraction was blocking. The command now fails fast in that situation unless `--allow-browser-auth` is passed.
+- Final local dry-run command completed with a structured `not_authenticated` result because this machine has no saved Boss credential and no `BOSS_COOKIES`. No messages were sent.
+
+### Design Notes
+
+- This is not yet the persistent worker. It is a safe command-level MVP used to validate data access and classification behavior before adding SQLite state and outbound replies.
+- The next code step should add persistence so repeated dry runs can skip already-seen candidates and maintain a clear audit trail.

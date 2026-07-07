@@ -26,6 +26,16 @@ Deliverables:
 
 Goal: automate the inbound Boss message follow-up loop while keeping all WeChat handling out of scope.
 
+Initial command:
+
+```bash
+boss workflow dry-run --rules-file docs/recruiting-workflow/examples/boss-dry-run-rules.json --limit 10 --json
+```
+
+The command is read-only and does not send messages. By default it uses only saved credentials or `BOSS_COOKIES`; it does not auto-read browser cookies because browser/keychain access can block unattended automation. Run `boss login` once first, or explicitly pass `--allow-browser-auth` when interactive browser cookie extraction is acceptable.
+
+By default it also avoids full resume/profile viewing because that may trigger Boss-side "candidate viewed" notifications. Use `--fetch-resume` only after accepting that product-side effect.
+
 Proposed flow:
 
 ```text
@@ -34,7 +44,7 @@ scheduled worker
   -> normalize candidate records
   -> skip candidates already processed
   -> boss recruiter chat <friendId> --json
-  -> boss recruiter resume <encryptGeekId> --json
+  -> optionally boss recruiter resume <encryptGeekId> --json
   -> evaluate against JD rules
   -> if matched: boss recruiter reply <friendId> <approved template> -y
   -> write state transition to SQLite
