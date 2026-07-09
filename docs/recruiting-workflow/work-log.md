@@ -187,3 +187,46 @@ iBossRoot.chat.sendMessage(message, "text", { uid, friendSource, encryptUid })
 - Native websocket/protobuf send remains a possible later optimization, but it is not the next practical step.
 - Plain Playwright/Chrome can be detected by Boss Web and redirected to `about:blank`; Camoufox is the preferred browser engine for live trials.
 - The first live send trial should still be one candidate, one approved message, with verification enabled.
+
+## 2026-07-09: First Live Browser-Backed Reply
+
+### Process
+
+- Ran `reply-browser --dry-run --json` to resolve the selected candidate and confirm no-send mode still worked.
+- Ran the first live send using Camoufox and the approved one-candidate message.
+- The first live attempt failed before sending because Boss Web loaded the chat page but did not expose `window.iBossRoot.chat`.
+- Diagnosed the page state and found Boss Web was usable through the visible DOM:
+  - a desktop app download prompt needed to be closed,
+  - candidate rows had stable ids using `_<friendId>-<friendSource>`,
+  - the composer was exposed as `#boss-chat-editor-input`,
+  - the official send button was visible in the chat composer.
+- Added a DOM fallback to `boss_cli/browser_reply.py`:
+  - close non-critical dialogs,
+  - click the resolved candidate row,
+  - verify the right-side conversation shows the expected candidate,
+  - fill the official composer,
+  - verify the composer text,
+  - click the official send button,
+  - verify through the latest-message API.
+
+### Results
+
+- The second live command succeeded.
+- Returned result:
+  - `sent=true`
+  - `verified=true`
+  - `engine=camoufox`
+  - `method=dom.chat-composer`
+  - latest message matched the exact approved outbound text.
+
+### Verification
+
+- Before the successful send, the latest message still showed the candidate's prior reply, confirming the failed bridge-only attempt did not send.
+- After the successful send, the command's latest-message verification matched the approved outbound text.
+
+### Design Notes
+
+- The reliable path is now two-layer browser-backed sending:
+  1. use the in-page Boss send bridge when available,
+  2. fall back to visible DOM controls when the bridge is not exposed.
+- Bulk sending is still not enabled. The next automation step should add state tracking and rate limits before processing multiple candidates.

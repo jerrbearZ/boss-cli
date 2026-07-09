@@ -314,12 +314,9 @@ def _send_from_page(page: Any, target: BrowserReplyTarget, message: str, *, time
         page.wait_for_function(
             """
             () => window.location.href !== 'about:blank'
-              && window.iBossRoot
-              && window.iBossRoot.chat
-              && (
-                typeof window.iBossRoot.chat.sendMessage === 'function'
-                || (window.top && window.top.mediator && typeof window.top.mediator.publish === 'function')
-              )
+              && document.body
+              && document.body.innerText
+              && document.body.innerText.includes('沟通')
             """,
             timeout=timeout_ms,
         )
@@ -335,6 +332,28 @@ def _send_from_page(page: Any, target: BrowserReplyTarget, message: str, *, time
             raise BrowserReplyError("Boss Web 需要重新登录，请先运行 boss login", code="browser_login_required") from exc
         raise BrowserReplyError("Boss Web 聊天环境未就绪", code="browser_chat_not_ready") from exc
 
+    _close_known_dialogs(page)
+
+    if _has_browser_send_bridge(page):
+        return _send_via_browser_bridge(page, target, message, timeout_ms=timeout_ms)
+
+    return _send_via_dom(page, target, message, timeout_ms=timeout_ms)
+
+
+def _has_browser_send_bridge(page: Any) -> bool:
+    try:
+        return bool(page.evaluate(
+            """
+            () => window.iBossRoot
+              && window.iBossRoot.chat
+              && typeof window.iBossRoot.chat.sendMessage === 'function'
+            """
+        ))
+    except Exception:
+        return False
+
+
+def _send_via_browser_bridge(page: Any, target: BrowserReplyTarget, message: str, *, timeout_ms: int) -> str:
     try:
         page.wait_for_function(
             "() => window.iBossRoot.chat.wsConnect && window.iBossRoot.chat.wsConnect()",
@@ -382,6 +401,87 @@ def _send_from_page(page: Any, target: BrowserReplyTarget, message: str, *, time
 
     page.wait_for_timeout(2_000)
     return str(result.get("method") or "browser")
+
+
+def _send_via_dom(page: Any, target: BrowserReplyTarget, message: str, *, timeout_ms: int) -> str:
+    """Send through visible Boss Web controls when globals are not exposed."""
+    row_selector = f'[id="_{target.friend_id}-{target.friend_source}"]'
+    row = page.locator(row_selector).first
+    try:
+        row.wait_for(state="visible", timeout=timeout_ms)
+    except Exception as exc:
+        raise BrowserReplyError(
+            f"未在 Boss 聊天列表中找到候选人行: friendId={target.friend_id}",
+            code="browser_target_not_visible",
+        ) from exc
+
+    row.click(timeout=10_000)
+    page.wait_for_timeout(2_000)
+    _close_known_dialogs(page)
+
+    if target.name:
+        try:
+            page.locator(".chat-conversation").get_by_text(target.name, exact=True).first.wait_for(
+                state="visible",
+                timeout=10_000,
+            )
+        except Exception as exc:
+            raise BrowserReplyError(
+                "候选人行已点击，但右侧会话未显示目标候选人，已停止发送",
+                code="browser_target_not_verified",
+            ) from exc
+
+    editor = page.locator("#boss-chat-editor-input").first
+    try:
+        editor.wait_for(state="visible", timeout=10_000)
+        editor.click(timeout=5_000)
+        editor.fill(message, timeout=10_000)
+    except Exception as exc:
+        raise BrowserReplyError("Boss Web 消息输入框不可用", code="browser_editor_not_ready") from exc
+
+    typed = ""
+    try:
+        typed = editor.inner_text(timeout=2_000)
+    except Exception:
+        pass
+    if message not in typed:
+        raise BrowserReplyError("输入框内容校验失败，已停止发送", code="browser_editor_verify_failed")
+
+    send_button = page.locator(".conversation-editor .submit, .conversation-editor .submit-content").filter(
+        has_text="发送"
+    ).last
+    try:
+        send_button.wait_for(state="visible", timeout=5_000)
+        send_button.click(timeout=5_000)
+    except Exception as exc:
+        raise BrowserReplyError("Boss Web 发送按钮不可用", code="browser_send_button_not_ready") from exc
+
+    page.wait_for_timeout(2_000)
+    return "dom.chat-composer"
+
+
+def _close_known_dialogs(page: Any) -> None:
+    """Dismiss non-critical Boss Web prompts that block the chat list."""
+    selectors = [
+        ".dialog-wrap.active .boss-popup__close",
+        ".boss-dialog__wrapper .boss-popup__close",
+    ]
+    for selector in selectors:
+        try:
+            locator = page.locator(selector).first
+            if locator.count() and locator.is_visible(timeout=1_000):
+                locator.click(timeout=3_000)
+                page.wait_for_timeout(500)
+        except Exception:
+            pass
+
+    try:
+        button = page.get_by_text("我知道了", exact=True).first
+        if button.count() and button.is_visible(timeout=1_000):
+            button.click(timeout=2_000)
+            page.wait_for_timeout(300)
+    except Exception:
+        pass
 
 
 def _safe_body_text(page: Any) -> str:

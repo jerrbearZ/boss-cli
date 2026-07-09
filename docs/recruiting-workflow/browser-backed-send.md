@@ -15,8 +15,9 @@ boss recruiter reply-browser <friendId> <message>
   -> read candidate detail via Boss recruiter API
   -> resolve friendId, friendSource, encryptUid
   -> open Boss Web chat in a browser context
-  -> wait for iBossRoot.chat and websocket connection
-  -> call Boss Web's own chat send bridge
+  -> close non-critical onboarding/download dialogs
+  -> prefer Boss Web's own chat send bridge when exposed
+  -> otherwise select the candidate row and use the visible chat composer
   -> poll latest-message API until the expected text appears
 ```
 
@@ -26,7 +27,7 @@ The browser bridge currently uses:
 iBossRoot.chat.sendMessage(message, "text", { uid, friendSource, encryptUid })
 ```
 
-This keeps the in-page Boss app responsible for websocket formatting, authentication, and message delivery.
+If that global bridge is not exposed, the DOM fallback uses the stable chat list row id and `#boss-chat-editor-input`, then clicks the official `发送` button. Both paths keep Boss Web responsible for websocket formatting, authentication, and message delivery.
 
 ## Commands
 
@@ -67,4 +68,4 @@ Camoufox is preferred because plain Playwright/Chrome may be detected by Boss We
 uv run python -m camoufox fetch
 ```
 
-- The current implementation has passed unit tests and a real-account dry run. A live browser send still needs one explicit operator-approved trial.
+- The implementation has passed unit tests, a real-account dry run, and one live one-candidate send trial.
