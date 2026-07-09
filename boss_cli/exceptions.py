@@ -52,6 +52,8 @@ def error_code_for_exception(exc: Exception) -> str:
         return "rate_limited"
     if isinstance(exc, ParamError):
         return "invalid_params"
+    if isinstance(exc, BossApiError) and isinstance(exc.code, str):
+        return exc.code
     if isinstance(exc, BossApiError):
         return "api_error"
     return "unknown_error"

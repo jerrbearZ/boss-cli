@@ -46,9 +46,11 @@ scheduled worker
   -> boss recruiter chat <friendId> --json
   -> optionally boss recruiter resume <encryptGeekId> --json
   -> evaluate against JD rules
-  -> if matched: boss recruiter reply <friendId> <approved template> -y
+  -> if matched: boss recruiter reply-browser <friendId> <approved template> -y
   -> write state transition to SQLite
 ```
+
+Normal outbound chat should use `reply-browser`, not the legacy `reply` command. The legacy command targets a Boss fast-reply HTTP endpoint and is not reliable for arbitrary typed messages.
 
 Minimum data model:
 

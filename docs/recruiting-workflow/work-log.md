@@ -140,3 +140,50 @@
 - The existing `boss recruiter reply` command is not reliable with the current QR-saved credential.
 - The saved credential still lacks `__zp_stoken__`, which may be required by Boss for chat-send endpoints.
 - Before enabling workflow send mode, the send primitive must be fixed and tested with full browser-derived Boss web cookies or replaced by verified browser UI automation.
+
+## 2026-07-09: Browser-Backed Reply Adapter
+
+### Process
+
+- Reviewed Boss Web's current JavaScript bundle to understand the normal send path.
+- Confirmed normal typed chat messages are sent through Boss Web's websocket client, not the `fastReply/sendReplyMsg` HTTP endpoint.
+- Implemented a new browser-backed send adapter in `boss_cli/browser_reply.py`.
+- Added `boss recruiter reply-browser` as the preferred command for normal recruiter replies.
+- Left the old `boss recruiter reply` command in place but clarified it is legacy/fast-reply behavior.
+- Added a dedicated design note at `docs/recruiting-workflow/browser-backed-send.md`.
+
+### Results
+
+- New command:
+
+```bash
+boss recruiter reply-browser <friendId> "message" -y --json
+```
+
+- New dry-run preview:
+
+```bash
+boss recruiter reply-browser <friendId> "message" --dry-run --json
+```
+
+- The command resolves target context through the Boss API, then sends through Boss Web's in-page chat bridge:
+
+```text
+iBossRoot.chat.sendMessage(message, "text", { uid, friendSource, encryptUid })
+```
+
+- After sending, the adapter polls the latest-message API to verify the expected text appears.
+
+### Verification
+
+- `uv run ruff check .` passed.
+- `uv run python -m pytest -p no:capture -q tests/test_browser_reply.py` passed.
+- `uv run python -m pytest -p no:capture -q -m 'not smoke'` passed.
+- Ran one real-account `reply-browser --dry-run --json` against the previously selected candidate. It resolved target context and did not send.
+
+### Design Notes
+
+- Chosen strategy is speed/reliability: API for reading, browser-backed Boss Web for sending.
+- Native websocket/protobuf send remains a possible later optimization, but it is not the next practical step.
+- Plain Playwright/Chrome can be detected by Boss Web and redirected to `about:blank`; Camoufox is the preferred browser engine for live trials.
+- The first live send trial should still be one candidate, one approved message, with verification enabled.

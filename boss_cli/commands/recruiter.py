@@ -6,18 +6,27 @@ import csv
 import io
 import json
 import logging
+import sys
 import time
 
 import click
 from rich.panel import Panel
 from rich.table import Table
 
+from ..browser_reply import (
+    BrowserReplyError,
+    make_dry_run_result,
+    resolve_browser_reply_target,
+    send_boss_message_via_browser,
+)
 from ..client import BossClient, resolve_city
 from ..constants import DEGREE_CODES, EXP_CODES, SALARY_CODES
 from ..exceptions import BossApiError
 from ._common import (
     console,
     handle_command,
+    _output_structured,
+    _print_error,
     require_auth,
     run_client_action,
     structured_output_options,
@@ -428,11 +437,12 @@ def recruiter_inbox(enc_job_id: str, label_id: int, display_limit: int, as_json:
 @click.option("-y", "--yes", is_flag=True, help="跳过确认提示")
 @structured_output_options
 def recruiter_reply(friend_id: int, message: str, yes: bool, as_json: bool, as_yaml: bool) -> None:
-    """发送消息给候选人 (Send message to candidate)"""
+    """旧版 HTTP 快捷回复接口 (normal chat should use reply-browser)"""
     cred = require_auth()
 
     if not yes:
-        console.print(f"[cyan]将向 friendId={friend_id} 发送消息:[/cyan]")
+        console.print("[yellow]提示: 普通聊天消息请优先使用 boss recruiter reply-browser。[/yellow]")
+        console.print(f"[cyan]将通过旧版 HTTP 快捷回复接口向 friendId={friend_id} 发送消息:[/cyan]")
         console.print(f"  {message}")
         confirm = click.confirm("\n确认发送?")
         if not confirm:
@@ -446,6 +456,95 @@ def recruiter_reply(friend_id: int, message: str, yes: bool, as_json: bool, as_y
         console.print(f"[green]消息已发送 -> friendId={friend_id}[/green]")
 
     handle_command(cred, action=_action, render=_render, as_json=as_json, as_yaml=as_yaml)
+
+
+# ── recruiter reply-browser ────────────────────────────────────────
+
+
+@recruiter.command("reply-browser")
+@click.argument("friend_id", type=int)
+@click.argument("message")
+@click.option("--engine", type=click.Choice(["auto", "camoufox", "chrome"]), default="auto", show_default=True,
+              help="浏览器发送引擎；auto 会先尝试 camoufox，再尝试 Chrome")
+@click.option("--headless", is_flag=True, help="无头模式运行浏览器；默认打开可见浏览器便于处理登录/风控提示")
+@click.option("--timeout", "timeout_s", default=45, type=int, show_default=True, help="等待 Boss Web 初始化的秒数")
+@click.option("--verify-timeout", default=20, type=int, show_default=True, help="发送后等待最新消息验证的秒数")
+@click.option("--dry-run", is_flag=True, help="只解析候选人并预览，不打开浏览器、不发送")
+@click.option("-y", "--yes", is_flag=True, help="跳过确认提示")
+@structured_output_options
+def recruiter_reply_browser(
+    friend_id: int,
+    message: str,
+    engine: str,
+    headless: bool,
+    timeout_s: int,
+    verify_timeout: int,
+    dry_run: bool,
+    yes: bool,
+    as_json: bool,
+    as_yaml: bool,
+) -> None:
+    """通过 Boss Web 官方聊天上下文发送普通消息"""
+    cred = require_auth()
+
+    try:
+        target = run_client_action(cred, lambda client: resolve_browser_reply_target(client, friend_id))
+
+        if dry_run:
+            result = make_dry_run_result(target, engine=engine).to_dict()
+            _render_reply_browser_result(result, message=message, as_json=as_json, as_yaml=as_yaml)
+            return
+
+        if not yes:
+            console.print("[cyan]将通过 Boss Web 浏览器会话发送普通聊天消息:[/cyan]")
+            console.print(f"  friendId: {target.friend_id}")
+            if target.name:
+                console.print(f"  候选人: {target.name}")
+            if target.job_name:
+                console.print(f"  职位: {target.job_name}")
+            console.print(f"  消息: {message}")
+            if not click.confirm("\n确认发送?"):
+                console.print("[dim]已取消[/dim]")
+                return
+
+        send_result = send_boss_message_via_browser(
+            cred,
+            target,
+            message,
+            engine=engine,
+            headless=headless,
+            timeout_ms=timeout_s * 1000,
+            verify_timeout_s=verify_timeout,
+        )
+        _render_reply_browser_result(send_result.to_dict(), message=message, as_json=as_json, as_yaml=as_yaml)
+    except BossApiError as exc:
+        _print_error(exc, as_json=as_json, as_yaml=as_yaml)
+        if isinstance(exc, BrowserReplyError) and not (as_json or as_yaml or not sys.stdout.isatty()):
+            console.print("[dim]建议: 优先安装/准备 camoufox: uv run python -m camoufox fetch[/dim]")
+        raise SystemExit(1) from None
+
+
+def _render_reply_browser_result(result: dict, *, message: str, as_json: bool, as_yaml: bool) -> None:
+    if as_json or as_yaml or not sys.stdout.isatty():
+        _output_structured(result, as_json=as_json, as_yaml=as_yaml)
+        return
+
+    target = result.get("target", {})
+    if result.get("dry_run"):
+        console.print("[yellow]预览模式，未发送消息[/yellow]")
+        console.print(f"  friendId: {result.get('friend_id')}")
+        if target.get("name"):
+            console.print(f"  候选人: {target.get('name')}")
+        if target.get("job_name"):
+            console.print(f"  职位: {target.get('job_name')}")
+        console.print(f"  将发送: {message}")
+        return
+
+    if result.get("verified"):
+        console.print(f"[green]消息已发送并验证 -> friendId={result.get('friend_id')}[/green]")
+    else:
+        console.print(f"[yellow]浏览器已触发发送，但最新消息未验证 -> friendId={result.get('friend_id')}[/yellow]")
+    console.print(f"  engine: {result.get('engine')}, method: {result.get('method')}")
 
 
 # ── recruiter export ──────────────────────────────────────────────
