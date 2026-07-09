@@ -68,3 +68,47 @@
 
 - This is not yet the persistent worker. It is a safe command-level MVP used to validate data access and classification behavior before adding SQLite state and outbound replies.
 - The next code step should add persistence so repeated dry runs can skip already-seen candidates and maintain a clear audit trail.
+
+## 2026-07-09: First Real Boss Account Dry Run
+
+### Process
+
+- Started Boss QR login with `uv run boss login --qrcode`.
+- The QR login succeeded and saved a local credential file.
+- The optional Camoufox `__zp_stoken__` hydration step began downloading a browser runtime, but the dry-run workflow worked with the saved QR credential, so the leftover download/login process was stopped.
+- Ran the Boss workflow against the real account in read-only mode with `--limit 1`, then with `--limit 5`.
+
+### Results
+
+- `--limit 1` dry run completed successfully:
+  - `ok=true`
+  - `total=1`
+  - `matched=1`
+  - `needs_review=0`
+  - `rejected=0`
+  - `errors=0`
+  - `sent_messages=0`
+- `--limit 5` dry run completed successfully:
+  - `ok=true`
+  - `total=2`
+  - `matched=2`
+  - `needs_review=0`
+  - `rejected=0`
+  - `errors=0`
+  - `sent_messages=0`
+- No replies were sent.
+- No full resume/profile fetch was requested.
+- No candidate names, IDs, contact values, or message text were recorded in this log.
+
+### Verification
+
+- Confirmed the saved credential exists and contains 5 cookies.
+- Confirmed `__zp_stoken__` is still absent from the saved credential.
+- Confirmed the dry-run command can read enough recruiter-side data to classify candidates without `__zp_stoken__` for this account/state.
+- Confirmed no long-running Boss login or Camoufox process remained after the run.
+
+### Design Notes
+
+- The current MVP is live-readable but still non-sending.
+- Because the saved QR credential lacks `__zp_stoken__`, future endpoints may still fail if they require browser-generated token state.
+- Before adding send mode, add SQLite state so the workflow can avoid duplicate outreach and preserve a non-PII audit trail.
