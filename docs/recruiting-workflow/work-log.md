@@ -112,3 +112,31 @@
 - The current MVP is live-readable but still non-sending.
 - Because the saved QR credential lacks `__zp_stoken__`, future endpoints may still fail if they require browser-generated token state.
 - Before adding send mode, add SQLite state so the workflow can avoid duplicate outreach and preserve a non-PII audit trail.
+
+## 2026-07-09: Reply Capability Test
+
+### Process
+
+- Attempted to send one Boss reply to a single user-selected candidate using `boss recruiter reply`.
+- The target was selected from the previously fetched inbox list.
+- After the direct reply command failed, attempted a fuller sequence that first enters the chat session with candidate/job/security context and then sends the message.
+- Retried the session-entry sequence with both numeric and encrypted candidate identifiers.
+
+### Results
+
+- No message was sent.
+- Boss returned `invalid_params` / `缺少必要参数` for the direct CLI reply path.
+- The session-entry sequence also failed with `缺少必要参数`, before the send step.
+- A read-only last-message check confirmed the candidate conversation did not update to the attempted outbound message.
+
+### Verification
+
+- Checked the CLI reply result JSON.
+- Checked the custom session-entry/send sequence result JSON.
+- Checked the latest message preview after the attempts.
+
+### Design Notes
+
+- The existing `boss recruiter reply` command is not reliable with the current QR-saved credential.
+- The saved credential still lacks `__zp_stoken__`, which may be required by Boss for chat-send endpoints.
+- Before enabling workflow send mode, the send primitive must be fixed and tested with full browser-derived Boss web cookies or replaced by verified browser UI automation.
