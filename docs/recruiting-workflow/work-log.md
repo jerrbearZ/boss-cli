@@ -230,3 +230,41 @@ iBossRoot.chat.sendMessage(message, "text", { uid, friendSource, encryptUid })
   1. use the in-page Boss send bridge when available,
   2. fall back to visible DOM controls when the bridge is not exposed.
 - Bulk sending is still not enabled. The next automation step should add state tracking and rate limits before processing multiple candidates.
+
+## 2026-07-10: Confirmed Bulk Send To Existing Boss Conversations
+
+### Process
+
+- Received explicit confirmation to send the approved Boss reply to all pending existing conversations.
+- Re-ran a read-only preflight before sending:
+  - checked current Boss conversations,
+  - checked recent history for the exact approved message,
+  - skipped conversations that already had the exact message,
+  - stopped before sending if the pending count changed from the confirmed count.
+- Used one Camoufox browser session and the DOM chat-composer fallback.
+- Sent sequentially with short delays between candidates.
+- Verified each candidate immediately after send through the latest-message API.
+- Stopped condition was configured as first send/verification failure; no failure occurred.
+
+### Results
+
+- Current conversations checked in preflight: 12.
+- Already had the exact approved message: 1.
+- Pending sends confirmed: 11.
+- Sent: 11.
+- Verified after send: 11.
+- Skipped as already sent: 1.
+- Final read-only history verification:
+  - checked: 12.
+  - matched exact approved message: 12.
+  - missing: 0.
+
+### Verification
+
+- Every live send returned `verified=True` from the latest-message API.
+- A final read-only history pass confirmed all current conversations contained the exact approved message.
+
+### Design Notes
+
+- The browser-backed DOM composer path is validated for one-by-one and small batch sending.
+- A production bulk mode should still be added as a first-class CLI command with persisted state, rate limits, run IDs, and redacted audit logs before doing larger batches.
