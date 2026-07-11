@@ -14,12 +14,12 @@ class BossApiError(Exception):
 
 
 class SessionExpiredError(BossApiError):
-    """Raised when __zp_stoken__ has expired (code=37)."""
+    """Raised when Boss reports expired or invalid login state."""
 
-    def __init__(self):
+    def __init__(self, message: str | None = None, code: int | str = 37):
         super().__init__(
-            "环境异常 (__zp_stoken__ 已过期)。请重新登录: boss logout && boss login",
-            code=37,
+            message or "环境异常 (__zp_stoken__ 已过期)。请重新登录: boss logout && boss login",
+            code=code,
         )
 
 

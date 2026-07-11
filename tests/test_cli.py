@@ -452,6 +452,18 @@ class TestClient:
             with pytest.raises(SessionExpiredError):
                 client._handle_response(data, "test")
 
+    def test_handle_response_login_state_expired(self):
+        from boss_cli.auth import Credential
+        from boss_cli.client import BossClient
+        from boss_cli.exceptions import SessionExpiredError
+
+        cred = Credential(cookies={})
+        with BossClient(cred) as client:
+            data = {"code": 7, "message": "当前登录状态已失效"}
+            with pytest.raises(SessionExpiredError) as exc_info:
+                client._handle_response(data, "候选人列表")
+            assert exc_info.value.code == 7
+
     def test_handle_response_param_error(self):
         from boss_cli.auth import Credential
         from boss_cli.client import BossClient

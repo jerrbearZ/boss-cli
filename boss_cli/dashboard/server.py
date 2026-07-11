@@ -13,7 +13,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from ..auth import Credential, load_credential, load_from_env
-from ..client import BossClient
+from ..commands._common import run_client_action
 from ..workflow import init_db
 from ..workflow.dashboard_service import DashboardService
 from ..workflow.poller import sync_inbox
@@ -208,15 +208,17 @@ def make_handler(runtime: DashboardRuntime) -> type[BaseHTTPRequestHandler]:
             if credential is None:
                 raise DashboardError("No saved Boss credential. Run `boss login` first.", status=HTTPStatus.UNAUTHORIZED)
             with init_db(runtime.db_path) as store:
-                with BossClient(credential) as client:
-                    return sync_inbox(
+                return run_client_action(
+                    credential,
+                    lambda client: sync_inbox(
                         store,
                         client,
                         credential,
                         enc_job_id=str(payload.get("enc_job_id") or ""),
                         label_id=int(payload.get("label_id") or 0),
                         limit=int(payload.get("limit") or 100),
-                    )
+                    ),
+                )
 
         def _serve_static(self, name: str) -> None:
             path = (STATIC_DIR / name).resolve()

@@ -222,8 +222,8 @@ class BossClient:
 
         message = data.get("message", "Unknown error")
 
-        if code == 37:
-            raise SessionExpiredError()
+        if code in (7, 37):
+            raise SessionExpiredError(f"{action}: {message} (code={code})", code=code)
         if code in (17, 19):
             raise ParamError(message, code=code)
         if code in (121, 122):

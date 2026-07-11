@@ -353,6 +353,39 @@ iBossRoot.chat.sendMessage(message, "text", { uid, friendSource, encryptUid })
 - Plain pytest capture still segfaults locally before tests run; continue using `-p no:capture`.
 - Future work should add CLI parity for the new service modules, richer classification, retry/cancel queue controls, and UI visual tests.
 
+## 2026-07-12: Dashboard Live Connection Attempt
+
+### Process
+
+- Confirmed the dashboard backend was running on `127.0.0.1:8765`.
+- Called dashboard `/api/health`; schema version 2 loaded with sender idle.
+- Called dashboard `/api/sync` to connect the UI to live Boss inbox reads.
+- Boss returned `code=7`, meaning the saved login state had expired.
+- Updated the Boss client to treat `code=7` as an authentication/session-expired condition, matching `code=37`.
+- Updated dashboard sync to use the CLI's existing `run_client_action` auth refresh path.
+- Started two fresh QR login attempts for the operator to scan and confirm; both expired before phone confirmation.
+
+### Results
+
+- Dashboard backend is connected to the workflow database and operational.
+- Live Boss sync is blocked only by missing/expired Boss authentication.
+- The dashboard recorded failed sync events with redacted summaries.
+
+### Verification
+
+- `uv run boss status --json`
+  - returned `authenticated=false` and `credential_present=false`
+- `uv run ruff check .`
+  - passed
+- `uv run python -m pytest -p no:capture -q -m 'not smoke'`
+  - `141 passed, 7 deselected`
+
+### Design Notes
+
+- No candidates were synced because Boss authentication is not currently valid.
+- No messages were enqueued or sent.
+- Next operator step is a successful `boss login --qrcode`, then rerun dashboard `Sync Inbox`.
+
 ## 2026-07-11: Production Architecture Planning
 
 ### Process
