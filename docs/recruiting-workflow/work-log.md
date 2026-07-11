@@ -231,6 +231,46 @@ iBossRoot.chat.sendMessage(message, "text", { uid, friendSource, encryptUid })
   2. fall back to visible DOM controls when the bridge is not exposed.
 - Bulk sending is still not enabled. The next automation step should add state tracking and rate limits before processing multiple candidates.
 
+## 2026-07-11: Production Architecture Planning
+
+### Process
+
+- Created a tracked goal for the production-level Boss recruiting automation design.
+- Spawned a read-only production-design sub-agent to review the current repo state and propose a high-volume architecture.
+- Inspected the existing workflow dry-run code and browser-backed send adapter.
+- Wrote production architecture documentation and an implementation-ready goal for coding agents.
+- Integrated the sub-agent's recommendations for WAL-backed SQLite, workflow package boundaries, richer queue/action tables, idempotency, rate limits, and operator commands.
+
+### Results
+
+- Added `docs/recruiting-workflow/production-architecture.md`.
+- Added `docs/recruiting-workflow/implementation-goal.md`.
+- Updated the documentation index in `docs/recruiting-workflow/README.md`.
+- Defined the production command direction:
+
+```bash
+boss workflow init-db
+boss workflow sync
+boss workflow classify
+boss workflow enqueue
+boss workflow send
+boss workflow queue ls
+boss workflow health
+```
+
+### Verification
+
+- The planning documents are grounded in current working primitives:
+  - Boss API reads in `boss_cli/client.py`
+  - dry-run classifier in `boss_cli/commands/workflow.py`
+  - verified browser send in `boss_cli/browser_reply.py`
+
+### Design Notes
+
+- Production should be queue-backed and stateful before any bulk sending.
+- The next coding goal is not "send more"; it is SQLite state, redaction, normalization, and idempotent sync.
+- Bulk send should only happen through persisted outbound actions with exact-message dedupe and latest-message verification.
+
 ## 2026-07-10: Confirmed Bulk Send To Existing Boss Conversations
 
 ### Process

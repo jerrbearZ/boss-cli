@@ -35,6 +35,9 @@ It does not yet:
 
 - [capability-assessment.md](./capability-assessment.md): Boss-only requirement mapping against the current repo.
 - [next-stage-plan.md](./next-stage-plan.md): Recommended next implementation stages and architecture.
+- [browser-backed-send.md](./browser-backed-send.md): Current verified strategy for sending Boss replies through Boss Web/Camoufox.
+- [production-architecture.md](./production-architecture.md): Production system design for high-volume Boss follow-up.
+- [implementation-goal.md](./implementation-goal.md): Implementation-ready goal and work packages for coding agents.
 - [documentation-practice.md](./documentation-practice.md): Required documentation standard for future work.
 - [work-log.md](./work-log.md): Chronological record of process, results, verification, and open gaps.
 
