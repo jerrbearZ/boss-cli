@@ -36,6 +36,11 @@ boss workflow send --max-actions 20 --engine camoufox --json
 boss workflow health --json
 ```
 
+## Implementation Status
+
+- Agent 1 state foundation: implemented on 2026-07-12.
+- Next unimplemented package: Agent 2 sync, normalizer, and classification commands.
+
 ## Acceptance Criteria
 
 The production MVP is complete when all of these are true:

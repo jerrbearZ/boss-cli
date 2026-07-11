@@ -14,7 +14,8 @@ from rich.table import Table
 from ..auth import Credential, load_from_env
 from ..client import BossClient
 from ..constants import CREDENTIAL_FILE
-from ._common import console, handle_command, require_auth, structured_output_options
+from ..workflow import init_db
+from ._common import _output_structured, console, handle_command, require_auth, structured_output_options
 
 
 DEFAULT_RULES: dict[str, Any] = {
@@ -37,6 +38,37 @@ DEFAULT_RULES: dict[str, Any] = {
 @click.group()
 def workflow() -> None:
     """招聘自动化工作流 (dry-run first)"""
+
+
+@workflow.command("init-db")
+@click.option(
+    "--db",
+    "db_path",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="SQLite workflow database path (default: $BOSS_WORKFLOW_DB or ~/.local/share/boss-cli/workflow.db)",
+)
+@structured_output_options
+def init_db_command(db_path: Path | None, as_json: bool, as_yaml: bool) -> None:
+    """Initialize the local workflow SQLite database."""
+    store = init_db(db_path)
+    try:
+        data = {
+            "db": str(store.path),
+            "schema_version": store.current_schema_version(),
+            "tables": store.table_names(),
+        }
+    finally:
+        store.close()
+
+    if as_json or as_yaml or not sys.stdout.isatty():
+        _output_structured(data, as_json=as_json, as_yaml=as_yaml)
+        return
+
+    console.print("[bold cyan]Boss workflow database initialized[/bold cyan]")
+    console.print(f"  db={data['db']}")
+    console.print(f"  schema_version={data['schema_version']}")
+    console.print(f"  tables={len(data['tables'])}")
 
 
 @workflow.command("dry-run")

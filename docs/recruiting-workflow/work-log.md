@@ -231,6 +231,47 @@ iBossRoot.chat.sendMessage(message, "text", { uid, friendSource, encryptUid })
   2. fall back to visible DOM controls when the bridge is not exposed.
 - Bulk sending is still not enabled. The next automation step should add state tracking and rate limits before processing multiple candidates.
 
+## 2026-07-12: Workflow State Foundation Implementation
+
+### Process
+
+- Implemented the first production coding slice from `implementation-goal.md`.
+- Added a dedicated `boss_cli.workflow` package instead of expanding the CLI command module into the workflow engine.
+- Kept the implementation safe: no Boss network reads, no browser automation, and no message sending were added in this step.
+- Reviewed the store design so future `sync` workers can run candidate/message upserts inside one explicit transaction.
+
+### Results
+
+- Added SQLite schema and initialization for:
+  - accounts, jobs, candidates, messages, candidate snapshots,
+  - rulesets, decisions, templates,
+  - outbound actions, action attempts, events, and rate-limit buckets.
+- Added `WorkflowStore` helpers for:
+  - database initialization,
+  - account/job/candidate/message upserts,
+  - ruleset/template storage,
+  - decision recording,
+  - outbound action enqueue/claim/verified/failed transitions,
+  - queue summaries and event append.
+- Added redaction and idempotency helpers for candidate names, message previews, contact-like values, message fingerprints, JSON hashes, and outbound action keys.
+- Added `boss workflow init-db --db <path> --json` as the first production workflow command.
+
+### Verification
+
+- `uv run python -m pytest -p no:capture -q tests/test_workflow_db.py tests/test_workflow_redaction.py tests/test_workflow.py -m 'not smoke'`
+  - `19 passed`
+- `uv run ruff check .`
+  - passed
+- `uv run python -m pytest -p no:capture -q -m 'not smoke'`
+  - `135 passed, 7 deselected`
+- Plain pytest capture still segfaults in the local pytest capture plugin before tests run; using `-p no:capture` remains the verified local test path.
+
+### Design Notes
+
+- This completes the Agent 1 foundation from the implementation plan.
+- The next coding step should add read-only `boss workflow sync` using the new store, normalizer, and Boss API mocks.
+- Live sending should remain blocked until `sync`, `classify`, and `enqueue` are backed by persisted, idempotent outbound actions.
+
 ## 2026-07-11: Production Architecture Planning
 
 ### Process
