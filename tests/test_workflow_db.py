@@ -19,7 +19,7 @@ def test_init_db_creates_expected_tables(tmp_path):
     finally:
         store.close()
 
-    assert schema_version == 1
+    assert schema_version == 2
     assert {
         "accounts",
         "jobs",
@@ -32,8 +32,11 @@ def test_init_db_creates_expected_tables(tmp_path):
         "outbound_actions",
         "action_attempts",
         "events",
+        "operator_selections",
         "rate_limit_buckets",
         "schema_migrations",
+        "workflow_runs",
+        "workflow_settings",
     }.issubset(tables)
 
 
@@ -246,6 +249,6 @@ def test_workflow_init_db_command_outputs_json(tmp_path):
     payload = json.loads(result.output)
     assert payload["ok"] is True
     assert payload["data"]["db"] == str(db_path)
-    assert payload["data"]["schema_version"] == 1
+    assert payload["data"]["schema_version"] == 2
     assert "outbound_actions" in payload["data"]["tables"]
     assert db_path.exists()

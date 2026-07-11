@@ -17,7 +17,7 @@ import logging
 import click
 
 from . import __version__
-from .commands import auth, personal, recruiter, search, social, workflow
+from .commands import auth, dashboard, personal, recruiter, search, social, workflow
 
 
 @click.group()
@@ -68,6 +68,8 @@ cli.add_command(recruiter.recruiter)
 # ─── Workflow automation commands ──────────────────────────────────
 
 cli.add_command(workflow.workflow)
+
+cli.add_command(dashboard.dashboard)
 
 
 if __name__ == "__main__":

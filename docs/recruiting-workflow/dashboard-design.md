@@ -2,6 +2,27 @@
 
 Date: 2026-07-12
 
+## Implementation Status
+
+Implemented MVP on 2026-07-12:
+
+- Local dashboard command: `boss dashboard`.
+- Local API over SQLite workflow state.
+- Inbox sync endpoint.
+- Candidate review and mass selection UI.
+- Template approval UI.
+- Enqueue selected candidates into persisted outbound actions.
+- Start/pause/resume/stop controls for a single background sender.
+- Queue, health, event, and run monitoring views.
+
+Remaining production hardening:
+
+- Add CLI parity for all workflow service operations.
+- Add richer classification/rules UI.
+- Add explicit retry/cancel queue controls in the UI.
+- Add authentication if serving beyond `127.0.0.1`.
+- Add browser-based visual regression tests for the dashboard UI.
+
 ## Purpose
 
 The dashboard should be the human operator surface for the Boss production workflow.

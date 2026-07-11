@@ -303,6 +303,56 @@ iBossRoot.chat.sendMessage(message, "text", { uid, friendSource, encryptUid })
 - The dashboard MVP should wait until `sync`, `classify`, `enqueue`, `send`, and `health` exist as workflow services or CLI commands.
 - The first deployable dashboard should be local-only on `127.0.0.1` until authentication and remote process controls are explicitly added.
 
+## 2026-07-12: Production Dashboard MVP Implementation
+
+### Process
+
+- Built the local dashboard as a control layer over the SQLite workflow state and outbound queue.
+- Added workflow service modules for inbox sync, normalization, planning/enqueue, dashboard summaries, and queue sending.
+- Added a stdlib HTTP server and static frontend instead of adding web framework dependencies.
+- Kept live sending behind persisted queue actions and a single sender thread.
+
+### Results
+
+- Added `boss dashboard --db <path> --host 127.0.0.1 --port 8765`.
+- Added dashboard screens for:
+  - system status,
+  - sync controls,
+  - candidate review and mass selection,
+  - message template approval,
+  - queue monitoring,
+  - event monitoring,
+  - sender start/pause/resume/stop.
+- Added dashboard API endpoints for health, sync, candidates, templates, enqueue, queue, events, runs, and sender controls.
+- Added SQLite v2 dashboard control tables:
+  - `workflow_runs`
+  - `operator_selections`
+  - `workflow_settings`
+
+### Verification
+
+- `uv run ruff check .`
+  - passed
+- `uv run python -m pytest -p no:capture -q -m 'not smoke'`
+  - `140 passed, 7 deselected`
+- `uv build`
+  - built sdist and wheel successfully
+- Local dashboard smoke:
+  - started `boss dashboard --db /tmp/boss-dashboard-smoke.db --host 127.0.0.1 --port 8876 --no-open`
+  - `GET /api/health` returned schema version 2 and an empty queue summary
+- Confirmed the wheel includes:
+  - `boss_cli/workflow/schema.sql`
+  - dashboard `index.html`
+  - dashboard `app.css`
+  - dashboard `app.js`
+
+### Design Notes
+
+- The dashboard can start a real browser-backed sender, but only for rows already enqueued as outbound actions.
+- The dashboard does not bypass idempotency keys, duplicate checks, queue status, or event logging.
+- Plain pytest capture still segfaults locally before tests run; continue using `-p no:capture`.
+- Future work should add CLI parity for the new service modules, richer classification, retry/cancel queue controls, and UI visual tests.
+
 ## 2026-07-11: Production Architecture Planning
 
 ### Process

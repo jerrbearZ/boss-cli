@@ -39,7 +39,9 @@ boss workflow health --json
 ## Implementation Status
 
 - Agent 1 state foundation: implemented on 2026-07-12.
-- Next unimplemented package: Agent 2 sync, normalizer, and classification commands.
+- Dashboard MVP service/UI layer: implemented on 2026-07-12.
+- Partially implemented service modules: sync normalizer, inbox poller, planner/enqueue, and queue sender.
+- Next unimplemented package: CLI parity and persisted classification commands.
 
 ## Acceptance Criteria
 

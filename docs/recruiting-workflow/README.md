@@ -19,6 +19,8 @@ It can:
 - Authenticate with Boss Zhipin through saved cookies, browser cookie extraction, environment cookies, and QR login.
 - Read recruiter jobs, candidate inbox entries, candidate details, resumes, and chat history.
 - Send recruiter-side replies to candidates.
+- Store workflow state in SQLite for candidates, messages, templates, queue actions, events, and dashboard controls.
+- Run a local dashboard for inbox sync, mass selection, template approval, queued sending, and monitoring.
 - Export structured JSON/YAML output that another automation service can consume.
 - Apply conservative request pacing and retry behavior around reverse-engineered Boss web APIs.
 
@@ -26,8 +28,7 @@ It does not yet:
 
 - Run as a persistent daemon.
 - Listen to incoming messages through webhook or event subscription.
-- Classify candidates against JD rules automatically.
-- Store per-candidate workflow state.
+- Provide complete production JD/rules classification commands.
 - Manage WeChat friend requests, remarks, tags, files, or cards.
 - Provide a platform-agnostic workflow abstraction for Boss, WeChat, Maimai, Lagou, LinkedIn, or other channels.
 

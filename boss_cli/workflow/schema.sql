@@ -9,6 +9,9 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 INSERT OR IGNORE INTO schema_migrations(version, name)
 VALUES (1, 'initial workflow state');
 
+INSERT OR IGNORE INTO schema_migrations(version, name)
+VALUES (2, 'dashboard control state');
+
 CREATE TABLE IF NOT EXISTS accounts (
   id INTEGER PRIMARY KEY,
   platform TEXT NOT NULL DEFAULT 'boss',
@@ -201,8 +204,38 @@ CREATE TABLE IF NOT EXISTS rate_limit_buckets (
   FOREIGN KEY(account_id) REFERENCES accounts(id)
 );
 
+CREATE TABLE IF NOT EXISTS workflow_runs (
+  id TEXT PRIMARY KEY,
+  run_type TEXT NOT NULL,
+  status TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  requested_by TEXT,
+  stop_reason TEXT,
+  summary_json TEXT
+);
+
+CREATE TABLE IF NOT EXISTS operator_selections (
+  id INTEGER PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  candidate_id INTEGER NOT NULL,
+  selected INTEGER NOT NULL,
+  selection_source TEXT NOT NULL,
+  reason_code TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(candidate_id) REFERENCES candidates(id)
+);
+
+CREATE TABLE IF NOT EXISTS workflow_settings (
+  key TEXT PRIMARY KEY,
+  value_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_candidates_account_last_seen ON candidates(account_id, last_seen_at);
 CREATE INDEX IF NOT EXISTS idx_messages_candidate_created ON messages(candidate_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_decisions_candidate_created ON decisions(candidate_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_outbound_actions_status_available ON outbound_actions(status, available_at, priority, created_at);
 CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_started ON workflow_runs(started_at);
+CREATE INDEX IF NOT EXISTS idx_operator_selections_run ON operator_selections(run_id, candidate_id);

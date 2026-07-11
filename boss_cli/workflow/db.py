@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -12,7 +14,7 @@ from typing import Any, Iterator
 from .models import ALL_ACTION_STATUSES, QueueSummary
 from .redaction import redact_text, sha256_text, stable_json_dumps
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 
@@ -558,6 +560,232 @@ class WorkflowStore:
             total += count
         summary["total"] = total
         return summary
+
+    def has_message_text(self, candidate_id: int, body: str) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 FROM messages WHERE candidate_id=? AND text_hash=? LIMIT 1",
+            (candidate_id, sha256_text(body)),
+        ).fetchone()
+        return row is not None
+
+    def mark_action_status(
+        self,
+        action_id: int,
+        *,
+        status: str,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        now = utc_now()
+        self.conn.execute(
+            """
+            UPDATE outbound_actions
+            SET status=?,
+                locked_by=NULL,
+                locked_at=NULL,
+                locked_until=NULL,
+                last_error_code=?,
+                last_error_message_redacted=?,
+                updated_at=?
+            WHERE id=?
+            """,
+            (
+                status,
+                error_code,
+                redact_text(error_message) if error_message else None,
+                now,
+                action_id,
+            ),
+        )
+        self._commit()
+
+    def get_action_context(self, action_id: int) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            """
+            SELECT
+              a.*,
+              c.friend_id,
+              c.uid,
+              c.friend_source,
+              c.encrypt_uid,
+              c.encrypt_geek_id,
+              c.name_redacted,
+              c.job_name,
+              t.name AS template_name,
+              t.version AS template_version,
+              t.body AS template_body,
+              t.body_hash AS template_body_hash
+            FROM outbound_actions a
+            JOIN candidates c ON c.id = a.candidate_id
+            JOIN message_templates t ON t.id = a.template_id
+            WHERE a.id=?
+            """,
+            (action_id,),
+        ).fetchone()
+        return _row_to_dict(row)
+
+    def list_candidates(self, *, limit: int = 200, status: str | None = None) -> list[dict[str, Any]]:
+        params: list[Any] = []
+        where = ""
+        if status:
+            where = "WHERE c.current_stage=?"
+            params.append(status)
+        params.append(limit)
+        rows = self.conn.execute(
+            f"""
+            SELECT
+              c.*,
+              (
+                SELECT status
+                FROM outbound_actions a
+                WHERE a.candidate_id = c.id
+                ORDER BY a.created_at DESC
+                LIMIT 1
+              ) AS latest_action_status,
+              (
+                SELECT decision
+                FROM decisions d
+                WHERE d.candidate_id = c.id
+                ORDER BY d.created_at DESC
+                LIMIT 1
+              ) AS latest_decision
+            FROM candidates c
+            {where}
+            ORDER BY c.last_seen_at DESC, c.id DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+        return [_row_to_dict(row) or {} for row in rows]
+
+    def list_queue(self, *, limit: int = 200) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT
+              a.*,
+              c.name_redacted,
+              c.job_name,
+              c.last_message_preview,
+              t.name AS template_name,
+              t.version AS template_version,
+              t.body AS template_body
+            FROM outbound_actions a
+            JOIN candidates c ON c.id = a.candidate_id
+            JOIN message_templates t ON t.id = a.template_id
+            ORDER BY a.created_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [_row_to_dict(row) or {} for row in rows]
+
+    def list_events(self, *, limit: int = 200) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM events ORDER BY created_at DESC, id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [_row_to_dict(row) or {} for row in rows]
+
+    def list_templates(self) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM message_templates ORDER BY created_at DESC, id DESC"
+        ).fetchall()
+        return [_row_to_dict(row) or {} for row in rows]
+
+    def get_template(self, template_id: int) -> dict[str, Any] | None:
+        row = self.conn.execute("SELECT * FROM message_templates WHERE id=?", (template_id,)).fetchone()
+        return _row_to_dict(row)
+
+    def set_setting(self, key: str, value: dict[str, Any] | str | bool | int | None) -> None:
+        now = utc_now()
+        value_json = stable_json_dumps(value)
+        self.conn.execute(
+            """
+            INSERT INTO workflow_settings(key, value_json, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+              value_json=excluded.value_json,
+              updated_at=excluded.updated_at
+            """,
+            (key, value_json, now),
+        )
+        self._commit()
+
+    def get_setting(self, key: str, default: Any = None) -> Any:
+        row = self.conn.execute("SELECT value_json FROM workflow_settings WHERE key=?", (key,)).fetchone()
+        if row is None:
+            return default
+        try:
+            return json.loads(row["value_json"])
+        except json.JSONDecodeError:
+            return default
+
+    def is_paused(self) -> bool:
+        value = self.get_setting("paused", False)
+        if isinstance(value, dict):
+            return bool(value.get("paused"))
+        return bool(value)
+
+    def create_run(self, *, run_type: str, requested_by: str | None = None) -> str:
+        run_id = uuid.uuid4().hex
+        self.conn.execute(
+            """
+            INSERT INTO workflow_runs(id, run_type, status, started_at, requested_by)
+            VALUES (?, ?, 'running', ?, ?)
+            """,
+            (run_id, run_type, utc_now(), requested_by),
+        )
+        self._commit()
+        return run_id
+
+    def finish_run(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        stop_reason: str | None = None,
+        summary: dict[str, Any] | None = None,
+    ) -> None:
+        self.conn.execute(
+            """
+            UPDATE workflow_runs
+            SET status=?,
+                finished_at=?,
+                stop_reason=?,
+                summary_json=?
+            WHERE id=?
+            """,
+            (status, utc_now(), stop_reason, stable_json_dumps(summary or {}), run_id),
+        )
+        self._commit()
+
+    def list_runs(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM workflow_runs ORDER BY started_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [_row_to_dict(row) or {} for row in rows]
+
+    def record_selection(
+        self,
+        *,
+        run_id: str,
+        candidate_id: int,
+        selected: bool,
+        selection_source: str,
+        reason_code: str | None = None,
+    ) -> int:
+        self.conn.execute(
+            """
+            INSERT INTO operator_selections(
+              run_id, candidate_id, selected, selection_source, reason_code, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (run_id, candidate_id, int(selected), selection_source, reason_code, utc_now()),
+        )
+        self._commit()
+        return int(self.conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"])
 
     def append_event(
         self,
