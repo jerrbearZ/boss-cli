@@ -272,6 +272,37 @@ iBossRoot.chat.sendMessage(message, "text", { uid, friendSource, encryptUid })
 - The next coding step should add read-only `boss workflow sync` using the new store, normalizer, and Boss API mocks.
 - Live sending should remain blocked until `sync`, `classify`, and `enqueue` are backed by persisted, idempotent outbound actions.
 
+## 2026-07-12: Production Dashboard Planning
+
+### Process
+
+- Reviewed the production architecture, implementation goal, and current SQLite state foundation.
+- Designed a dashboard as an operator surface over the same durable workflow state and queue, not as a separate direct-send tool.
+- Mapped the requested start/stop and monitoring capabilities to safe workflow phases: sync, review, select, approve template, enqueue, send, verify, audit.
+
+### Results
+
+- Added `docs/recruiting-workflow/dashboard-design.md`.
+- Updated the documentation index in `docs/recruiting-workflow/README.md`.
+- Defined the dashboard's main screens:
+  - Control Room
+  - Inbox Review
+  - Message Composer
+  - Queue And Sending
+  - Events And Audit
+- Defined proposed dashboard API endpoints and SQLite additions for run tracking, operator selections, and workflow settings.
+
+### Verification
+
+- This was a design/documentation step only.
+- No Boss reads, browser automation, or message sending were run.
+
+### Design Notes
+
+- The dashboard should not be implemented as a bulk sender that bypasses persisted outbound actions.
+- The dashboard MVP should wait until `sync`, `classify`, `enqueue`, `send`, and `health` exist as workflow services or CLI commands.
+- The first deployable dashboard should be local-only on `127.0.0.1` until authentication and remote process controls are explicitly added.
+
 ## 2026-07-11: Production Architecture Planning
 
 ### Process
