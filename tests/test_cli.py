@@ -578,6 +578,10 @@ class TestAuthHealthVerification:
                 calls["count"] += 1
                 return {"jobList": []}
 
+            def get_user_info(self):
+                calls["count"] += 1
+                return {"userInfo": {"userId": 1}}
+
         _AUTH_HEALTH_CACHE.clear()
         monkeypatch.setattr("boss_cli.client.BossClient", FakeClient)
 
@@ -587,7 +591,7 @@ class TestAuthHealthVerification:
 
         assert first["authenticated"] is True
         assert second["recommend_authenticated"] is True
-        assert calls["count"] == 2
+        assert calls["count"] == 3
         assert len(_AUTH_HEALTH_CACHE) == 1
 
     def test_verify_credential_force_refresh_bypasses_cache(self, monkeypatch):
@@ -613,6 +617,10 @@ class TestAuthHealthVerification:
                 calls["count"] += 1
                 return {"jobList": []}
 
+            def get_user_info(self):
+                calls["count"] += 1
+                return {"userInfo": {"userId": 1}}
+
         _AUTH_HEALTH_CACHE.clear()
         monkeypatch.setattr("boss_cli.client.BossClient", FakeClient)
 
@@ -620,7 +628,40 @@ class TestAuthHealthVerification:
         verify_credential_details(cred)
         verify_credential_details(cred, force_refresh=True)
 
-        assert calls["count"] == 4
+        assert calls["count"] == 6
+
+    def test_verify_credential_accepts_recruiter_flow_without_stoken(self, monkeypatch):
+        from boss_cli.auth import Credential, _AUTH_HEALTH_CACHE, verify_credential_details
+        from boss_cli.exceptions import SessionExpiredError
+
+        class FakeClient:
+            def __init__(self, credential, request_delay=0.2):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def search_jobs(self, **kwargs):
+                raise SessionExpiredError()
+
+            def get_recommend_jobs(self, page=1):
+                raise SessionExpiredError()
+
+            def get_user_info(self):
+                return {"userInfo": {"userId": 1}}
+
+        _AUTH_HEALTH_CACHE.clear()
+        monkeypatch.setattr("boss_cli.client.BossClient", FakeClient)
+        cred = Credential(cookies={"wt2": "1", "wbg": "2", "zp_at": "3"})
+
+        result = verify_credential_details(cred)
+
+        assert result["authenticated"] is True
+        assert result["search_authenticated"] is False
+        assert result["recruiter_authenticated"] is True
 
 
 # ── Index Cache ─────────────────────────────────────────────────────

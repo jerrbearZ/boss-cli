@@ -27,6 +27,7 @@ WechatSendFunc = Callable[[Credential, BrowserReplyTarget], BrowserWechatResult]
 MessagePreflightFunc = Callable[[Credential, BrowserReplyTarget, str], bool]
 
 _RETRYABLE_CODES = {
+    "browser_backend_missing",
     "browser_engine_failed",
     "browser_page_load_failed",
     "browser_chat_not_ready",

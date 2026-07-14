@@ -904,13 +904,16 @@ def _credential_cache_key(credential: Credential) -> str:
 def verify_credential_details(credential: Credential, *, force_refresh: bool = False) -> dict[str, Any]:
     """Verify credential health across the key authenticated flows."""
     if not credential.has_required_cookies:
-        missing = ", ".join(credential.missing_required_cookies)
-        return {
-            "authenticated": False,
-            "search_authenticated": False,
-            "recommend_authenticated": False,
-            "reason": f"缺少关键 Cookie: {missing}",
-        }
+        missing_cookies = credential.missing_required_cookies
+        if missing_cookies != ["__zp_stoken__"]:
+            missing = ", ".join(missing_cookies)
+            return {
+                "authenticated": False,
+                "search_authenticated": False,
+                "recommend_authenticated": False,
+                "recruiter_authenticated": False,
+                "reason": f"缺少关键 Cookie: {missing}",
+            }
 
     from .client import BossClient
     from .exceptions import BossApiError, SessionExpiredError
@@ -925,6 +928,7 @@ def verify_credential_details(credential: Credential, *, force_refresh: bool = F
     checks = {
         "search_authenticated": False,
         "recommend_authenticated": False,
+        "recruiter_authenticated": False,
     }
     failures: list[str] = []
 
@@ -945,7 +949,15 @@ def verify_credential_details(credential: Credential, *, force_refresh: bool = F
         except BossApiError as exc:
             failures.append(f"recommend: 登录态校验失败: {exc}")
 
-    authenticated = checks["search_authenticated"]
+        try:
+            client.get_user_info()
+            checks["recruiter_authenticated"] = True
+        except SessionExpiredError as exc:
+            failures.append(f"recruiter: {exc}")
+        except BossApiError as exc:
+            failures.append(f"recruiter: 登录态校验失败: {exc}")
+
+    authenticated = checks["search_authenticated"] or checks["recruiter_authenticated"]
     result: dict[str, Any] = {
         "authenticated": authenticated,
         **checks,

@@ -335,6 +335,35 @@ def test_sender_cancels_wechat_when_message_fails_terminally(tmp_path):
         store.close()
 
 
+def test_sender_keeps_dependency_queued_when_browser_backend_is_missing(tmp_path):
+    store = init_db(tmp_path / "workflow.db")
+    try:
+        sync_inbox(store, FakeBossClient(), Credential({"wt2": "account"}), limit=10)
+        service = DashboardService(store)
+        candidate_id = service.candidates()[0]["id"]
+        template = service.create_template(name="reply", version="v1", body="您好，可以详细沟通", approved=True)
+        service.enqueue(candidate_ids=[candidate_id], template_id=template["id"], request_wechat=True)
+
+        def fail_message(credential, target, body):
+            raise BrowserReplyError("browser extra missing", code="browser_backend_missing")
+
+        result = send_queued_actions(
+            store,
+            Credential({"wt2": "account"}),
+            max_actions=2,
+            send_func=fail_message,
+            message_preflight_func=lambda credential, target, body: False,
+            delay_seconds=0,
+        )
+        statuses = [row["status"] for row in store.conn.execute("SELECT status FROM outbound_actions ORDER BY id")]
+
+        assert result["failed_retryable"] == 1
+        assert result["cancelled_dependents"] == 0
+        assert statuses == ["failed_retryable", "queued"]
+    finally:
+        store.close()
+
+
 def test_sender_live_preflight_skips_duplicate_without_clicking(tmp_path):
     store = init_db(tmp_path / "workflow.db")
     try:
