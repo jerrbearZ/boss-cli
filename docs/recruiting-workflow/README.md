@@ -41,6 +41,7 @@ It does not yet:
 - [implementation-goal.md](./implementation-goal.md): Implementation-ready goal and work packages for coding agents.
 - [dashboard-design.md](./dashboard-design.md): Operator dashboard design for controlled sending and audit monitoring.
 - [reader-architecture.md](./reader-architecture.md): Current incremental reader behavior, privacy boundaries, and recovery model.
+- [automation-dashboard.md](./automation-dashboard.md): Typed batch messages, WeChat exchange execution, dashboard flow, and recovery behavior.
 - [documentation-practice.md](./documentation-practice.md): Required documentation standard for future work.
 - [work-log.md](./work-log.md): Chronological record of process, results, verification, and open gaps.
 

@@ -192,6 +192,7 @@ Persist recruiter jobs, inbox conversations, latest messages, and bounded chat h
 ```bash
 boss workflow init-db
 boss workflow sync --limit 100 --history changed --history-budget 20 --json
+boss dashboard --port 8765                                    # Review, queue messages/WeChat requests, and run bounded batches
 boss dashboard
 ```
 

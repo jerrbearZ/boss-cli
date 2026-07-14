@@ -30,6 +30,40 @@
 - Full resume reads remain outside the synchronization path because they may trigger candidate-visible side effects.
 - The next workflow component should consume normalized SQLite state rather than re-reading Boss independently.
 
+## 2026-07-14: Typed Batch Automation And Integrated Dashboard
+
+### Process
+
+- Added schema version 4 with optional templates and action dependencies.
+- Expanded the planner to create `send_message` and `exchange_wechat` actions independently or as an ordered pair.
+- Added a visible browser-backed WeChat exchange adapter with success-state verification.
+- Hardened the queue worker with active-account claims, live latest-message preflight, typed dispatch, delayed retries, dependency cancellation, and uncertain-outcome recovery.
+- Rebuilt the local dashboard around inbox sync, candidate filtering and selection, message approval, action composition, queue inspection, and bounded execution.
+
+### Results
+
+- The same approved message can be queued for a selected batch without duplicate action rows.
+- WeChat-only actions no longer require placeholder templates.
+- Message-plus-WeChat batches cannot execute the exchange until the message is verified or already present.
+- Do-not-contact and inactive candidates are excluded from dashboard selection, and the planner enforces the same boundary.
+- Expired sending leases move to `needs_review` rather than being replayed.
+- Queue summaries, reads, and claims are scoped to the active recruiter account.
+
+### Verification
+
+- `uv run ruff check .` passed.
+- `uv run python -m pytest -p no:capture -q -m 'not smoke'` passed with `171 passed, 7 deselected`.
+- `uv build` produced the `0.4.0` wheel and source distribution.
+- A schema v3 database with an existing action migrated to v4 with no foreign-key violations.
+- A seeded dashboard rendered at desktop and mobile widths with no console errors or body overflow.
+- Browser interaction verification confirmed filtering, do-not-contact exclusion, action-mode switching, confirmation, and queue creation.
+
+### Design Notes
+
+- No live BOSS messages or WeChat requests were sent during this implementation pass.
+- The `换微信` selectors and success labels are based on the validated BOSS Web workflow and must be rechecked after material BOSS UI changes.
+- The dashboard remains a trusted localhost, single-operator tool rather than a public service.
+
 ## 2026-07-08: Initial Boss-Side Context Layer
 
 ### Process
