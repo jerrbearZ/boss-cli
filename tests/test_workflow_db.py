@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+from pathlib import Path
 
 from click.testing import CliRunner
 
@@ -19,7 +21,7 @@ def test_init_db_creates_expected_tables(tmp_path):
     finally:
         store.close()
 
-    assert schema_version == 2
+    assert schema_version == 3
     assert {
         "accounts",
         "jobs",
@@ -37,6 +39,8 @@ def test_init_db_creates_expected_tables(tmp_path):
         "schema_migrations",
         "workflow_runs",
         "workflow_settings",
+        "sync_checkpoints",
+        "sync_run_errors",
     }.issubset(tables)
 
 
@@ -97,6 +101,110 @@ def test_account_candidate_and_message_upserts_are_idempotent(tmp_path):
         assert candidate is not None
         assert candidate["uid"] == 5002
         assert "13812345678" not in candidate["last_message_preview"]
+    finally:
+        store.close()
+
+
+def test_candidate_sync_upsert_preserves_operator_owned_state(tmp_path):
+    store = init_db(tmp_path / "workflow.db")
+    try:
+        account_id = store.upsert_account(account_hash="account")
+        candidate_id = store.upsert_candidate(
+            account_id=account_id,
+            friend_id=1001,
+            do_not_contact=True,
+            current_stage="manual_review",
+        )
+        store.upsert_candidate(
+            account_id=account_id,
+            friend_id=1001,
+            do_not_contact=False,
+            current_stage="seen",
+            last_seen_run_id="sync-run",
+        )
+
+        candidate = store.get_candidate(candidate_id)
+
+        assert candidate is not None
+        assert candidate["do_not_contact"] == 1
+        assert candidate["current_stage"] == "manual_review"
+        assert candidate["last_seen_run_id"] == "sync-run"
+    finally:
+        store.close()
+
+
+def test_stable_account_identity_promotes_cookie_account(tmp_path):
+    store = init_db(tmp_path / "workflow.db")
+    try:
+        fallback_id = store.resolve_account(
+            stable_hash=None,
+            fallback_hash="cookie-hash",
+            identity_source="credential",
+        )
+        stable_id = store.resolve_account(
+            stable_hash="recruiter-hash",
+            fallback_hash="cookie-hash",
+            identity_source="message_participants",
+        )
+
+        accounts = store.list_accounts()
+
+        assert stable_id == fallback_id
+        assert len(accounts) == 1
+        assert accounts[0]["account_hash"] == "recruiter-hash"
+        assert accounts[0]["external_id_hash"] == "recruiter-hash"
+    finally:
+        store.close()
+
+
+def test_sync_checkpoint_round_trip(tmp_path):
+    store = init_db(tmp_path / "workflow.db")
+    try:
+        account_id = store.upsert_account(account_hash="account")
+        store.set_sync_checkpoint(
+            account_id=account_id,
+            stream="inbox",
+            filter_hash="all",
+            cursor={"next_page": 3},
+            completed=False,
+        )
+
+        checkpoint = store.get_sync_checkpoint(
+            account_id=account_id,
+            stream="inbox",
+            filter_hash="all",
+        )
+
+        assert checkpoint is not None
+        assert checkpoint["cursor"] == {"next_page": 3}
+        assert checkpoint["completed"] is False
+    finally:
+        store.close()
+
+
+def test_v2_database_migrates_in_place(tmp_path):
+    db_path = tmp_path / "workflow.db"
+    schema_path = Path(__file__).parents[1] / "boss_cli" / "workflow" / "schema.sql"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(schema_path.read_text(encoding="utf-8"))
+    conn.execute(
+        """
+        INSERT INTO accounts(
+          platform, account_hash, status, created_at, updated_at
+        ) VALUES ('boss', 'existing', 'active', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    store = init_db(db_path)
+    try:
+        account = store.list_accounts()[0]
+
+        assert store.current_schema_version() == 3
+        assert account["account_hash"] == "existing"
+        assert account["identity_source"] == "credential"
+        assert "sync_checkpoints" in store.table_names()
     finally:
         store.close()
 
@@ -249,6 +357,6 @@ def test_workflow_init_db_command_outputs_json(tmp_path):
     payload = json.loads(result.output)
     assert payload["ok"] is True
     assert payload["data"]["db"] == str(db_path)
-    assert payload["data"]["schema_version"] == 2
+    assert payload["data"]["schema_version"] == 3
     assert "outbound_actions" in payload["data"]["tables"]
     assert db_path.exists()

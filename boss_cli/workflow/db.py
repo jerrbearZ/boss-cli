@@ -14,8 +14,9 @@ from typing import Any, Iterator
 from .models import ALL_ACTION_STATUSES, QueueSummary
 from .redaction import redact_text, sha256_text, stable_json_dumps
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
+MIGRATIONS_PATH = Path(__file__).with_name("migrations")
 
 
 def utc_now() -> str:
@@ -42,6 +43,7 @@ def init_db(path: Path | str | None = None) -> "WorkflowStore":
     conn.row_factory = sqlite3.Row
     _configure_connection(conn)
     conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+    _apply_migrations(conn)
     conn.commit()
     return WorkflowStore(db_path, conn)
 
@@ -60,6 +62,19 @@ def _configure_connection(conn: sqlite3.Connection) -> None:
     except sqlite3.OperationalError:
         # WAL is unavailable for in-memory databases; foreign keys still matter.
         pass
+
+
+def _apply_migrations(conn: sqlite3.Connection) -> None:
+    """Apply ordered SQL migrations newer than the database schema version."""
+    row = conn.execute("SELECT MAX(version) AS version FROM schema_migrations").fetchone()
+    current = int(row["version"] or 0)
+    if not MIGRATIONS_PATH.exists():
+        return
+    for path in sorted(MIGRATIONS_PATH.glob("[0-9][0-9][0-9][0-9]_*.sql")):
+        version = int(path.name.split("_", 1)[0])
+        if version > current:
+            conn.executescript(path.read_text(encoding="utf-8"))
+            current = version
 
 
 class WorkflowStore:
@@ -124,27 +139,109 @@ class WorkflowStore:
         paused_until: str | None = None,
         last_auth_ok_at: str | None = None,
         last_error_code: str | None = None,
+        external_id_hash: str | None = None,
+        identity_source: str = "credential",
     ) -> int:
         now = utc_now()
         self.conn.execute(
             """
             INSERT INTO accounts (
               platform, account_hash, status, paused_until, last_auth_ok_at,
-              last_error_code, created_at, updated_at
+              last_error_code, external_id_hash, identity_source, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(account_hash) DO UPDATE SET
               platform=excluded.platform,
               status=excluded.status,
               paused_until=excluded.paused_until,
               last_auth_ok_at=COALESCE(excluded.last_auth_ok_at, accounts.last_auth_ok_at),
               last_error_code=excluded.last_error_code,
+              external_id_hash=COALESCE(excluded.external_id_hash, accounts.external_id_hash),
+              identity_source=CASE
+                WHEN excluded.external_id_hash IS NOT NULL THEN excluded.identity_source
+                ELSE accounts.identity_source
+              END,
               updated_at=excluded.updated_at
             """,
-            (platform, account_hash, status, paused_until, last_auth_ok_at, last_error_code, now, now),
+            (
+                platform,
+                account_hash,
+                status,
+                paused_until,
+                last_auth_ok_at,
+                last_error_code,
+                external_id_hash,
+                identity_source,
+                now,
+                now,
+            ),
         )
         self._commit()
         return self._id_for("accounts", "account_hash", account_hash)
+
+    def resolve_account(
+        self,
+        *,
+        stable_hash: str | None,
+        fallback_hash: str,
+        identity_source: str,
+        observed_friend_ids: list[int] | None = None,
+    ) -> int:
+        """Resolve or promote a local account without binding identity to rotating cookies."""
+        if stable_hash:
+            stable = self.conn.execute(
+                "SELECT id FROM accounts WHERE account_hash=? OR external_id_hash=? ORDER BY id LIMIT 1",
+                (stable_hash, stable_hash),
+            ).fetchone()
+            if stable:
+                account_id = int(stable["id"])
+                self.conn.execute(
+                    "UPDATE accounts SET external_id_hash=?, identity_source=?, last_auth_ok_at=?, updated_at=? WHERE id=?",
+                    (stable_hash, identity_source, utc_now(), utc_now(), account_id),
+                )
+                self._commit()
+                return account_id
+
+            fallback = self.conn.execute("SELECT id FROM accounts WHERE account_hash=?", (fallback_hash,)).fetchone()
+            candidate_account_id = int(fallback["id"]) if fallback else self._account_for_observed_friends(observed_friend_ids or [])
+            if candidate_account_id is not None:
+                self.conn.execute(
+                    """
+                    UPDATE accounts
+                    SET account_hash=?, external_id_hash=?, identity_source=?, last_auth_ok_at=?, updated_at=?
+                    WHERE id=?
+                    """,
+                    (stable_hash, stable_hash, identity_source, utc_now(), utc_now(), candidate_account_id),
+                )
+                self._commit()
+                return candidate_account_id
+
+            return self.upsert_account(
+                account_hash=stable_hash,
+                external_id_hash=stable_hash,
+                identity_source=identity_source,
+                last_auth_ok_at=utc_now(),
+            )
+
+        return self.upsert_account(
+            account_hash=fallback_hash,
+            identity_source="credential",
+            last_auth_ok_at=utc_now(),
+        )
+
+    def _account_for_observed_friends(self, friend_ids: list[int]) -> int | None:
+        if not friend_ids:
+            return None
+        placeholders = ",".join("?" for _ in friend_ids)
+        rows = self.conn.execute(
+            f"SELECT DISTINCT account_id FROM candidates WHERE friend_id IN ({placeholders})",
+            friend_ids,
+        ).fetchall()
+        return int(rows[0]["account_id"]) if len(rows) == 1 else None
+
+    def list_accounts(self) -> list[dict[str, Any]]:
+        rows = self.conn.execute("SELECT * FROM accounts ORDER BY updated_at DESC, id DESC").fetchall()
+        return [_row_to_dict(row) or {} for row in rows]
 
     def upsert_job(
         self,
@@ -154,22 +251,41 @@ class WorkflowStore:
         job_name: str | None = None,
         active: bool = True,
         last_seen_at: str | None = None,
+        boss_job_id: int | None = None,
+        last_seen_run_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> int:
         now = utc_now()
         seen_at = last_seen_at or now
         self.conn.execute(
             """
             INSERT INTO jobs (
-              account_id, enc_job_id, job_name, active, last_seen_at, created_at, updated_at
+              account_id, enc_job_id, job_name, active, last_seen_at, boss_job_id,
+              last_seen_run_id, inactive_at, metadata_json, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
             ON CONFLICT(account_id, enc_job_id) DO UPDATE SET
               job_name=COALESCE(excluded.job_name, jobs.job_name),
               active=excluded.active,
               last_seen_at=excluded.last_seen_at,
+              boss_job_id=COALESCE(excluded.boss_job_id, jobs.boss_job_id),
+              last_seen_run_id=COALESCE(excluded.last_seen_run_id, jobs.last_seen_run_id),
+              inactive_at=NULL,
+              metadata_json=COALESCE(excluded.metadata_json, jobs.metadata_json),
               updated_at=excluded.updated_at
             """,
-            (account_id, enc_job_id, job_name, int(active), seen_at, now, now),
+            (
+                account_id,
+                enc_job_id,
+                job_name,
+                int(active),
+                seen_at,
+                boss_job_id,
+                last_seen_run_id,
+                stable_json_dumps(metadata) if metadata else None,
+                now,
+                now,
+            ),
         )
         self._commit()
         row = self.conn.execute(
@@ -201,10 +317,16 @@ class WorkflowStore:
         last_outbound_at: str | None = None,
         last_message_preview: str | None = None,
         last_message_fingerprint: str | None = None,
+        last_observed_at: str | None = None,
+        last_activity_at: str | None = None,
+        last_seen_run_id: str | None = None,
+        history_synced_through: str | None = None,
+        history_sync_status: str = "pending",
     ) -> int:
         now = utc_now()
         first_seen = first_seen_at or now
         last_seen = last_seen_at or now
+        observed_at = last_observed_at or now
         self.conn.execute(
             """
             INSERT INTO candidates (
@@ -212,9 +334,18 @@ class WorkflowStore:
               security_id_present, job_id, encrypt_job_id, job_name, name_redacted,
               name_hash, do_not_contact, current_stage, first_seen_at, last_seen_at,
               last_inbound_at, last_outbound_at, last_message_preview,
-              last_message_fingerprint, created_at, updated_at
+              last_message_fingerprint, last_observed_at, last_activity_at,
+              last_seen_run_id, history_synced_through, history_sync_status,
+              inactive_at, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (
+              ?, ?, ?, ?, ?,
+              ?, ?, ?, ?, ?,
+              ?, ?, ?, ?, ?,
+              ?, ?, ?, ?, ?,
+              ?, ?, ?, ?, ?,
+              NULL, ?, ?
+            )
             ON CONFLICT(account_id, friend_id, friend_source) DO UPDATE SET
               uid=COALESCE(excluded.uid, candidates.uid),
               encrypt_uid=COALESCE(excluded.encrypt_uid, candidates.encrypt_uid),
@@ -225,13 +356,20 @@ class WorkflowStore:
               job_name=COALESCE(excluded.job_name, candidates.job_name),
               name_redacted=COALESCE(excluded.name_redacted, candidates.name_redacted),
               name_hash=COALESCE(excluded.name_hash, candidates.name_hash),
-              do_not_contact=excluded.do_not_contact,
-              current_stage=excluded.current_stage,
               last_seen_at=excluded.last_seen_at,
               last_inbound_at=COALESCE(excluded.last_inbound_at, candidates.last_inbound_at),
               last_outbound_at=COALESCE(excluded.last_outbound_at, candidates.last_outbound_at),
               last_message_preview=COALESCE(excluded.last_message_preview, candidates.last_message_preview),
               last_message_fingerprint=COALESCE(excluded.last_message_fingerprint, candidates.last_message_fingerprint),
+              last_observed_at=excluded.last_observed_at,
+              last_activity_at=COALESCE(excluded.last_activity_at, candidates.last_activity_at),
+              last_seen_run_id=COALESCE(excluded.last_seen_run_id, candidates.last_seen_run_id),
+              history_synced_through=COALESCE(excluded.history_synced_through, candidates.history_synced_through),
+              history_sync_status=CASE
+                WHEN excluded.history_sync_status='pending' THEN candidates.history_sync_status
+                ELSE excluded.history_sync_status
+              END,
+              inactive_at=NULL,
               updated_at=excluded.updated_at
             """,
             (
@@ -255,6 +393,11 @@ class WorkflowStore:
                 last_outbound_at,
                 redact_text(last_message_preview) if last_message_preview else None,
                 last_message_fingerprint,
+                observed_at,
+                last_activity_at,
+                last_seen_run_id,
+                history_synced_through,
+                history_sync_status,
                 now,
                 now,
             ),
@@ -277,15 +420,19 @@ class WorkflowStore:
         sent_at: str | None = None,
         text_hash: str | None = None,
         text_redacted: str | None = None,
+        source: str = "latest",
+        content_kind: str = "text",
+        payload_hash: str | None = None,
     ) -> int:
         now = utc_now()
         self.conn.execute(
             """
             INSERT INTO messages (
               candidate_id, boss_msg_id, direction, msg_type, sent_at, text_hash,
-              text_redacted, fingerprint, created_at, updated_at
+              text_redacted, fingerprint, source, content_kind, payload_hash,
+              created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(candidate_id, fingerprint) DO UPDATE SET
               boss_msg_id=COALESCE(excluded.boss_msg_id, messages.boss_msg_id),
               direction=excluded.direction,
@@ -293,6 +440,9 @@ class WorkflowStore:
               sent_at=COALESCE(excluded.sent_at, messages.sent_at),
               text_hash=COALESCE(excluded.text_hash, messages.text_hash),
               text_redacted=COALESCE(excluded.text_redacted, messages.text_redacted),
+              source=CASE WHEN excluded.source='history' THEN 'history' ELSE messages.source END,
+              content_kind=excluded.content_kind,
+              payload_hash=COALESCE(excluded.payload_hash, messages.payload_hash),
               updated_at=excluded.updated_at
             """,
             (
@@ -304,6 +454,9 @@ class WorkflowStore:
                 text_hash,
                 redact_text(text_redacted) if text_redacted else None,
                 fingerprint,
+                source,
+                content_kind,
+                payload_hash,
                 now,
                 now,
             ),
@@ -314,6 +467,130 @@ class WorkflowStore:
             (candidate_id, fingerprint),
         ).fetchone()
         return int(row["id"])
+
+    def has_message_fingerprint(self, candidate_id: int, fingerprint: str) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 FROM messages WHERE candidate_id=? AND fingerprint=? LIMIT 1",
+            (candidate_id, fingerprint),
+        ).fetchone()
+        return row is not None
+
+    def upsert_candidate_snapshot(
+        self,
+        *,
+        candidate_id: int,
+        source: str,
+        payload_hash: str,
+        summary: dict[str, Any] | None,
+        fetched_at: str | None = None,
+    ) -> int:
+        now = utc_now()
+        self.conn.execute(
+            """
+            INSERT INTO candidate_snapshots(
+              candidate_id, source, fetched_at, payload_hash, summary_json, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(candidate_id, source, payload_hash) DO NOTHING
+            """,
+            (
+                candidate_id,
+                source,
+                fetched_at or now,
+                payload_hash,
+                stable_json_dumps(summary or {}),
+                now,
+            ),
+        )
+        self._commit()
+        row = self.conn.execute(
+            "SELECT id FROM candidate_snapshots WHERE candidate_id=? AND source=? AND payload_hash=?",
+            (candidate_id, source, payload_hash),
+        ).fetchone()
+        return int(row["id"])
+
+    def get_candidate_by_external_key(
+        self,
+        *,
+        account_id: int,
+        friend_id: int,
+        friend_source: int = 0,
+    ) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM candidates WHERE account_id=? AND friend_id=? AND friend_source=?",
+            (account_id, friend_id, friend_source),
+        ).fetchone()
+        return _row_to_dict(row)
+
+    def mark_candidate_history_state(
+        self,
+        candidate_id: int,
+        *,
+        status: str,
+        synced_through: str | None = None,
+    ) -> None:
+        self.conn.execute(
+            """
+            UPDATE candidates
+            SET history_sync_status=?,
+                history_synced_through=COALESCE(?, history_synced_through),
+                updated_at=?
+            WHERE id=?
+            """,
+            (status, synced_through, utc_now(), candidate_id),
+        )
+        self._commit()
+
+    def refresh_candidate_activity(self, candidate_id: int) -> None:
+        row = self.conn.execute(
+            """
+            SELECT
+              MAX(CASE WHEN direction='inbound' THEN sent_at END) AS last_inbound,
+              MAX(CASE WHEN direction='outbound' THEN sent_at END) AS last_outbound,
+              MAX(sent_at) AS last_activity
+            FROM messages
+            WHERE candidate_id=?
+            """,
+            (candidate_id,),
+        ).fetchone()
+        self.conn.execute(
+            """
+            UPDATE candidates
+            SET last_inbound_at=COALESCE(?, last_inbound_at),
+                last_outbound_at=COALESCE(?, last_outbound_at),
+                last_activity_at=COALESCE(?, last_activity_at),
+                updated_at=?
+            WHERE id=?
+            """,
+            (row["last_inbound"], row["last_outbound"], row["last_activity"], utc_now(), candidate_id),
+        )
+        self._commit()
+
+    def mark_unseen_candidates_inactive(self, *, account_id: int, run_id: str) -> int:
+        now = utc_now()
+        cursor = self.conn.execute(
+            """
+            UPDATE candidates
+            SET inactive_at=COALESCE(inactive_at, ?), updated_at=?
+            WHERE account_id=? AND (last_seen_run_id IS NULL OR last_seen_run_id<>?)
+            """,
+            (now, now, account_id, run_id),
+        )
+        self._commit()
+        return int(cursor.rowcount)
+
+    def mark_unseen_jobs_inactive(self, *, account_id: int, run_id: str) -> int:
+        now = utc_now()
+        cursor = self.conn.execute(
+            """
+            UPDATE jobs
+            SET active=0, inactive_at=COALESCE(inactive_at, ?), updated_at=?
+            WHERE account_id=? AND (last_seen_run_id IS NULL OR last_seen_run_id<>?)
+            """,
+            (now, now, account_id, run_id),
+        )
+        self._commit()
+        return int(cursor.rowcount)
 
     def upsert_ruleset(
         self,
@@ -624,12 +901,22 @@ class WorkflowStore:
         ).fetchone()
         return _row_to_dict(row)
 
-    def list_candidates(self, *, limit: int = 200, status: str | None = None) -> list[dict[str, Any]]:
+    def list_candidates(
+        self,
+        *,
+        limit: int = 200,
+        status: str | None = None,
+        account_id: int | None = None,
+    ) -> list[dict[str, Any]]:
         params: list[Any] = []
-        where = ""
+        conditions: list[str] = []
         if status:
-            where = "WHERE c.current_stage=?"
+            conditions.append("c.current_stage=?")
             params.append(status)
+        if account_id is not None:
+            conditions.append("c.account_id=?")
+            params.append(account_id)
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         params.append(limit)
         rows = self.conn.execute(
             f"""
@@ -657,6 +944,16 @@ class WorkflowStore:
             params,
         ).fetchall()
         return [_row_to_dict(row) or {} for row in rows]
+
+    def candidate_count(self, *, account_id: int | None = None) -> int:
+        if account_id is None:
+            row = self.conn.execute("SELECT COUNT(*) AS count FROM candidates").fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT COUNT(*) AS count FROM candidates WHERE account_id=?",
+                (account_id,),
+            ).fetchone()
+        return int(row["count"])
 
     def list_queue(self, *, limit: int = 200) -> list[dict[str, Any]]:
         rows = self.conn.execute(
@@ -726,17 +1023,30 @@ class WorkflowStore:
             return bool(value.get("paused"))
         return bool(value)
 
-    def create_run(self, *, run_type: str, requested_by: str | None = None) -> str:
+    def create_run(
+        self,
+        *,
+        run_type: str,
+        requested_by: str | None = None,
+        account_id: int | None = None,
+        filters: dict[str, Any] | None = None,
+    ) -> str:
         run_id = uuid.uuid4().hex
         self.conn.execute(
             """
-            INSERT INTO workflow_runs(id, run_type, status, started_at, requested_by)
-            VALUES (?, ?, 'running', ?, ?)
+            INSERT INTO workflow_runs(
+              id, run_type, status, started_at, requested_by, account_id, filter_json
+            )
+            VALUES (?, ?, 'running', ?, ?, ?, ?)
             """,
-            (run_id, run_type, utc_now(), requested_by),
+            (run_id, run_type, utc_now(), requested_by, account_id, _json_or_none(filters)),
         )
         self._commit()
         return run_id
+
+    def attach_run_account(self, run_id: str, account_id: int) -> None:
+        self.conn.execute("UPDATE workflow_runs SET account_id=? WHERE id=?", (account_id, run_id))
+        self._commit()
 
     def finish_run(
         self,
@@ -745,6 +1055,7 @@ class WorkflowStore:
         status: str,
         stop_reason: str | None = None,
         summary: dict[str, Any] | None = None,
+        request_count: int = 0,
     ) -> None:
         self.conn.execute(
             """
@@ -752,10 +1063,11 @@ class WorkflowStore:
             SET status=?,
                 finished_at=?,
                 stop_reason=?,
-                summary_json=?
+                summary_json=?,
+                request_count=?
             WHERE id=?
             """,
-            (status, utc_now(), stop_reason, stable_json_dumps(summary or {}), run_id),
+            (status, utc_now(), stop_reason, stable_json_dumps(summary or {}), request_count, run_id),
         )
         self._commit()
 
@@ -765,6 +1077,76 @@ class WorkflowStore:
             (limit,),
         ).fetchall()
         return [_row_to_dict(row) or {} for row in rows]
+
+    def get_sync_checkpoint(
+        self,
+        *,
+        account_id: int,
+        stream: str,
+        filter_hash: str,
+    ) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            """
+            SELECT cursor_json, completed, updated_at
+            FROM sync_checkpoints
+            WHERE account_id=? AND stream=? AND filter_hash=?
+            """,
+            (account_id, stream, filter_hash),
+        ).fetchone()
+        if row is None:
+            return None
+        try:
+            cursor = json.loads(row["cursor_json"])
+        except json.JSONDecodeError:
+            cursor = {}
+        return {"cursor": cursor, "completed": bool(row["completed"]), "updated_at": row["updated_at"]}
+
+    def set_sync_checkpoint(
+        self,
+        *,
+        account_id: int,
+        stream: str,
+        filter_hash: str,
+        cursor: dict[str, Any],
+        completed: bool,
+    ) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO sync_checkpoints(
+              account_id, stream, filter_hash, cursor_json, completed, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(account_id, stream, filter_hash) DO UPDATE SET
+              cursor_json=excluded.cursor_json,
+              completed=excluded.completed,
+              updated_at=excluded.updated_at
+            """,
+            (account_id, stream, filter_hash, stable_json_dumps(cursor), int(completed), utc_now()),
+        )
+        self._commit()
+
+    def record_sync_error(
+        self,
+        *,
+        run_id: str,
+        error_code: str,
+        error_message: str,
+        account_id: int | None = None,
+        friend_id: int | None = None,
+        page: int | None = None,
+    ) -> int:
+        self.conn.execute(
+            """
+            INSERT INTO sync_run_errors(
+              run_id, account_id, friend_id, page, error_code,
+              error_message_redacted, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (run_id, account_id, friend_id, page, error_code, redact_text(error_message), utc_now()),
+        )
+        self._commit()
+        return int(self.conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"])
 
     def record_selection(
         self,

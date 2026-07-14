@@ -145,7 +145,7 @@ def test_dashboard_http_health_endpoint(tmp_path):
 
         assert response.status == 200
         assert payload["ok"] is True
-        assert payload["data"]["schema_version"] == 2
+        assert payload["data"]["schema_version"] == 3
         assert payload["data"]["queue"]["total"] == 0
     finally:
         server.shutdown()
