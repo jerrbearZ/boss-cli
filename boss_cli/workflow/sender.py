@@ -104,7 +104,7 @@ def send_queued_actions(
                 break
 
             action_type = str(context.get("action_type") or "")
-            candidate_id = int(context["candidate_id"])
+            action_candidate_id = int(context["candidate_id"])
             target = _target_from_context(context)
             try:
                 if action_type in {SEND_MESSAGE, "send_template"}:
@@ -113,7 +113,7 @@ def send_queued_actions(
                         credential,
                         run_id=run_id,
                         action_id=action_id,
-                        candidate_id=candidate_id,
+                        candidate_id=action_candidate_id,
                         context=context,
                         target=target,
                         sender=message_sender,
@@ -136,7 +136,7 @@ def send_queued_actions(
                         credential,
                         run_id=run_id,
                         action_id=action_id,
-                        candidate_id=candidate_id,
+                        candidate_id=action_candidate_id,
                         target=target,
                         sender=wechat_sender,
                     )

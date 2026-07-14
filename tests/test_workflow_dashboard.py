@@ -302,6 +302,55 @@ def test_sender_runs_message_then_wechat_in_dependency_order(tmp_path):
         store.close()
 
 
+def test_sender_unscoped_run_processes_multiple_candidates(tmp_path):
+    store = init_db(tmp_path / "workflow.db")
+    calls = []
+    try:
+        sync_inbox(store, FakeBossClient(), Credential({"wt2": "account"}), limit=10)
+        service = DashboardService(store)
+        first_candidate_id = service.candidates()[0]["id"]
+        account_id = service.health()["active_account_id"]
+        second_candidate_id = store.upsert_candidate(
+            account_id=account_id,
+            friend_id=202,
+            uid=502,
+            encrypt_uid="enc-502",
+            encrypt_geek_id="geek-502",
+            encrypt_job_id="job-2",
+            job_name="sales",
+        )
+        template = service.create_template(name="reply", version="v1", body="您好，可以详细沟通", approved=True)
+        service.enqueue(candidate_ids=[first_candidate_id, second_candidate_id], template_id=template["id"])
+
+        def fake_message(credential, target, body):
+            calls.append(target.friend_id)
+            return BrowserReplyResult(
+                ok=True,
+                friend_id=target.friend_id,
+                sent=True,
+                verified=True,
+                engine="fake",
+                method="fake.message",
+                target=target.safe_dict(),
+                verification={"matched": True},
+            )
+
+        result = send_queued_actions(
+            store,
+            Credential({"wt2": "account"}),
+            max_actions=2,
+            send_func=fake_message,
+            message_preflight_func=lambda credential, target, body: False,
+            delay_seconds=0,
+        )
+
+        assert calls == [501, 502]
+        assert result["messages_verified"] == 2
+        assert result["claimed"] == 2
+    finally:
+        store.close()
+
+
 def test_sender_cancels_wechat_when_message_fails_terminally(tmp_path):
     store = init_db(tmp_path / "workflow.db")
     try:
