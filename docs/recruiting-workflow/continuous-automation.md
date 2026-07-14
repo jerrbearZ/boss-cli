@@ -109,6 +109,21 @@ The model receives:
 
 It does not receive BOSS cookies, candidate IDs used by BOSS, raw names, phone numbers, WeChat IDs, full resumes, or unredacted transcripts from this workflow. Raw provider responses are not persisted; only a response hash, validated result, confidence, and redacted reason are stored.
 
+## Current Validation Status
+
+As of 2026-07-15, the Alibaba Model Studio credential has been validated against the configured Beijing
+endpoint using `qwen-plus`. The credential was supplied only to the test process and was not written to the
+repository or workflow database. Because it was shared in plaintext, rotate it before the first production
+live test.
+
+Two synthetic, non-candidate conversations verified the complete model boundary:
+
+- A direct request to continue on WeChat selected approved template ID 5, `wechat_candidate_requested`.
+- A question about the business and role selected approved template ID 8, `automotive_warranty_role_context`.
+- Both calls returned valid JSON, selected only IDs from the six active approved templates, and passed local
+  outcome, confidence, and catalog validation.
+- The daemon remained `not_started`; no BOSS conversation was read and no outbound action was performed.
+
 ## Operations
 
 ### 1. Prepare authentication and state
@@ -185,6 +200,57 @@ boss workflow daemon-status --json
 
 The dashboard shows heartbeat freshness, mode, last cycle, next poll, decisions, total verified deliveries, queue state, errors, and audit events.
 
+## Next Acceptance Test: Reply And WeChat Exchange
+
+The next milestone is one controlled end-to-end canary proving that an approved reply is sent and verified,
+then the dependent visible `换微信` control is executed and verified for the same conversation.
+
+### Preconditions
+
+1. Rotate the credential used for the synthetic test and expose the replacement as `DASHSCOPE_API_KEY` only
+   in the test process environment.
+2. Confirm BOSS authentication is valid and identify one consenting test conversation by `friendId`.
+3. Confirm the daemon is stopped and the queue contains no older `queued`, `locked`, `sending`, or
+   `failed_retryable` actions.
+4. Isolate the canary candidate before live mode. The current `--candidate-limit 1` option selects the oldest
+   eligible inbound conversation; it does not target a specific candidate. Add a candidate-scoped canary
+   option or use an account/database where the test conversation is the only eligible trigger.
+5. Resolve the exact target without sending:
+
+```bash
+boss recruiter reply-browser <friendId> '<approved-template-body>' --dry-run --json
+```
+
+### Controlled Execution
+
+After candidate isolation and target verification:
+
+```bash
+boss workflow daemon \
+  --once \
+  --live \
+  --request-wechat \
+  --candidate-limit 1 \
+  --max-actions 2 \
+  --action-delay 60 \
+  --json
+```
+
+Do not substitute `boss recruiter exchange-wechat` for this acceptance test. That command uses the separate
+BOSS HTTP exchange endpoint, while continuous automation uses the visible browser-backed `换微信` control.
+
+### Pass Criteria
+
+- Exactly one approved message action reaches `verified` and the BOSS latest-message read matches its exact
+  immutable template body.
+- Exactly one dependent WeChat action reaches `verified` only after the message action verifies.
+- The browser observes a changed success indicator such as `等待对方同意` or `微信交换请求已发送`.
+- The run reports `messages_verified=1`, `wechat_verified=1`, no uncertain send, and no terminal failure.
+- Dashboard queue, delivery totals, and audit events all identify the same candidate and run.
+
+Stop immediately on a target mismatch, login prompt, captcha, missing WeChat control, unverified latest
+message, or any BOSS risk-control response. Leave uncertain actions in review; do not replay them manually.
+
 ## Pause And Shutdown
 
 Dashboard `Pause` sets durable global state. A paused daemon still synchronizes the inbox so monitoring remains current, but it does not call the model, enqueue actions, or claim sends. `Resume` re-enables those stages.
@@ -222,7 +288,8 @@ It remains a trusted localhost application without user authentication. Do not b
 - Browser UI selectors may change when BOSS Web changes.
 - The dashboard does not resolve review decisions or retry individual actions yet.
 - Process supervision, secrets management, and OS startup installation are deployment responsibilities.
-- No live outbound BOSS action was executed as part of this code change.
+- The Qwen transport and selection boundary are validated; the new Qwen-driven browser reply and dependent
+  WeChat exchange still require the controlled live canary above.
 
 ## Verification Baseline
 

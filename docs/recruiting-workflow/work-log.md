@@ -1,5 +1,39 @@
 # Work Log
 
+## 2026-07-15: Alibaba Qwen And Curated Template Validation
+
+### Process
+
+- Replaced the OpenAI-specific selector with Alibaba Model Studio `qwen-plus` through the OpenAI-compatible
+  Chat Completions endpoint.
+- Configured non-thinking JSON mode and retained local validation of outcome, confidence, and approved IDs.
+- Added and approved six immutable automotive/WeChat templates with intent-specific selection guidance.
+- Retired the two overlapping legacy active templates in the local workflow database.
+- Validated the supplied Alibaba credential with two synthetic conversations; the key was not persisted.
+
+### Results
+
+- The WeChat-request case selected `wechat_candidate_requested` (template ID 5).
+- The business/role-context case selected `automotive_warranty_role_context` (template ID 8).
+- Both responses were valid constrained selections from the six approved active templates.
+- The daemon remained stopped and no BOSS message or WeChat request was sent.
+
+### Verification
+
+- Clean Python 3.13 full suite: `186 passed, 7 skipped`.
+- Ruff lint checks passed.
+- Wheel and source distribution builds passed.
+- Local database and dashboard both reported six active curated templates.
+- Repository scan confirmed that the supplied API key was not written into tracked or untracked project files.
+
+### Next Step
+
+- Run one candidate-isolated live canary through the continuous daemon.
+- Require one exact approved message to verify before its dependent browser-backed `换微信` action runs.
+- Treat `messages_verified=1` and `wechat_verified=1` for the same run as the acceptance gate.
+- Add candidate-scoped canary targeting first; `--candidate-limit 1` alone does not identify a safe test target.
+- Rotate the plaintext-shared API credential before live execution.
+
 ## 2026-07-14: Continuous Automation Pivot
 
 ### Process
