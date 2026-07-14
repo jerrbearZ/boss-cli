@@ -212,9 +212,8 @@ then the dependent visible `换微信` control is executed and verified for the 
 2. Confirm BOSS authentication is valid and identify one consenting test conversation by `friendId`.
 3. Confirm the daemon is stopped and the queue contains no older `queued`, `locked`, `sending`, or
    `failed_retryable` actions.
-4. Isolate the canary candidate before live mode. The current `--candidate-limit 1` option selects the oldest
-   eligible inbound conversation; it does not target a specific candidate. Add a candidate-scoped canary
-   option or use an account/database where the test conversation is the only eligible trigger.
+4. Isolate the canary candidate with `--friend-id <friendId>`. `--candidate-limit 1` alone selects the oldest
+   eligible inbound conversation and is not a safe substitute for explicit canary targeting.
 5. Resolve the exact target without sending:
 
 ```bash
@@ -230,6 +229,7 @@ boss workflow daemon \
   --once \
   --live \
   --request-wechat \
+  --friend-id <friendId> \
   --candidate-limit 1 \
   --max-actions 2 \
   --action-delay 60 \

@@ -525,6 +525,14 @@ class WorkflowStore:
         ).fetchone()
         return _row_to_dict(row)
 
+    def get_candidate_by_friend_id(self, *, account_id: int, friend_id: int) -> dict[str, Any] | None:
+        """Return one account-scoped candidate for a BOSS conversation friend id."""
+        row = self.conn.execute(
+            "SELECT * FROM candidates WHERE account_id=? AND friend_id=? ORDER BY id DESC LIMIT 1",
+            (account_id, friend_id),
+        ).fetchone()
+        return _row_to_dict(row)
+
     def mark_candidate_history_state(
         self,
         candidate_id: int,
@@ -762,6 +770,7 @@ class WorkflowStore:
         lease_seconds: int = 300,
         now: str | None = None,
         account_id: int | None = None,
+        candidate_id: int | None = None,
     ) -> dict[str, Any] | None:
         if self._transaction_depth > 0:
             raise RuntimeError("claim_next_action manages its own lease transaction")
@@ -790,9 +799,12 @@ class WorkflowStore:
                 (claim_time, claim_time),
             )
             account_clause = "AND c.account_id=?" if account_id is not None else ""
+            candidate_clause = "AND a.candidate_id=?" if candidate_id is not None else ""
             params: list[Any] = [claim_time, claim_time]
             if account_id is not None:
                 params.append(account_id)
+            if candidate_id is not None:
+                params.append(candidate_id)
             row = self.conn.execute(
                 f"""
                 SELECT a.*
@@ -805,6 +817,7 @@ class WorkflowStore:
                   AND (a.next_retry_at IS NULL OR a.next_retry_at <= ?)
                   AND (a.depends_on_action_id IS NULL OR dependency.status IN ('verified', 'skipped_duplicate'))
                   {account_clause}
+                  {candidate_clause}
                 ORDER BY a.priority ASC, a.created_at ASC, a.id ASC
                 LIMIT 1
                 """,
@@ -1174,6 +1187,7 @@ class WorkflowStore:
         catalog_hash: str,
         prompt_version: str,
         limit: int = 20,
+        friend_id: int | None = None,
     ) -> list[dict[str, Any]]:
         rows = self.conn.execute(
             """
@@ -1192,10 +1206,11 @@ class WorkflowStore:
               LIMIT 1
             )
             WHERE c.account_id=?
+              AND (? IS NULL OR c.friend_id=?)
               AND c.do_not_contact=0
               AND c.inactive_at IS NULL
               AND m.direction='inbound'
-              AND m.content_kind='text'
+              AND m.content_kind IN ('text', 'contact_request')
               AND COALESCE(m.text_redacted, '') <> ''
               AND NOT EXISTS (
                 SELECT 1
@@ -1208,7 +1223,7 @@ class WorkflowStore:
             ORDER BY COALESCE(m.sent_at, m.created_at) ASC, c.id ASC
             LIMIT ?
             """,
-            (account_id, catalog_hash, prompt_version, limit),
+            (account_id, friend_id, friend_id, catalog_hash, prompt_version, limit),
         ).fetchall()
         return [_row_to_dict(row) or {} for row in rows]
 

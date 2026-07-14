@@ -27,6 +27,7 @@ class AutomationConfig:
     poll_interval_seconds: float = 30.0
     error_backoff_seconds: float = 120.0
     candidate_limit: int = 20
+    target_friend_id: int | None = None
     max_actions_per_cycle: int = 10
     action_delay_seconds: float = 1.0
     confidence_threshold: float = 0.75
@@ -81,7 +82,11 @@ def run_automation_cycle(
     run_id = store.create_run(
         run_type="automation_cycle",
         requested_by="daemon",
-        filters={"live": config.live, "request_wechat": config.request_wechat},
+        filters={
+            "live": config.live,
+            "request_wechat": config.request_wechat,
+            "target_friend_id": config.target_friend_id,
+        },
     )
     summary: dict[str, Any] = {
         "account_id": None,
@@ -96,6 +101,7 @@ def run_automation_cycle(
         "wechat_verified": 0,
         "paused": False,
         "live": config.live,
+        "target_friend_id": config.target_friend_id,
     }
     try:
         sync = sync_inbox(
@@ -125,9 +131,27 @@ def run_automation_cycle(
             store.finish_run(run_id, status="paused", stop_reason="operator_paused", summary=summary)
             return {"run_id": run_id, "status": "paused", **summary}
 
+        target_candidate_id: int | None = None
+        if config.target_friend_id is not None:
+            target = store.get_candidate_by_friend_id(
+                account_id=account_id,
+                friend_id=config.target_friend_id,
+            )
+            if target is not None:
+                target_candidate_id = int(target["id"])
+
         templates = store.list_active_templates()
         cycle_status = "completed"
-        if not templates:
+        if config.target_friend_id is not None and target_candidate_id is None:
+            store.append_event(
+                run_id=run_id,
+                event_type="automation_canary_target_missing",
+                severity="warning",
+                summary="Canary friend id was not found in the synchronized account",
+                details={"target_friend_id": config.target_friend_id},
+            )
+            cycle_status = "needs_review"
+        elif not templates:
             store.append_event(
                 run_id=run_id,
                 event_type="automation_needs_templates",
@@ -142,6 +166,7 @@ def run_automation_cycle(
                 catalog_hash=catalog_hash,
                 prompt_version=config.decision_prompt_version,
                 limit=config.candidate_limit,
+                friend_id=config.target_friend_id,
             )
             summary["eligible"] = len(candidates)
             for candidate in candidates:
@@ -202,7 +227,8 @@ def run_automation_cycle(
                 summary[outcome if outcome in {"selected", "review", "skipped"} else "errors"] += 1
 
         send_summary: dict[str, Any] | None = None
-        if config.live and not (stop_requested and stop_requested()):
+        can_send_target = config.target_friend_id is None or target_candidate_id is not None
+        if config.live and can_send_target and not (stop_requested and stop_requested()):
             send_summary = send_queued_actions(
                 store,
                 credential,
@@ -213,6 +239,7 @@ def run_automation_cycle(
                 wechat_send_func=wechat_send_func,
                 message_preflight_func=message_preflight_func,
                 account_id=account_id,
+                candidate_id=target_candidate_id,
                 requested_by="daemon",
             )
             summary["sent"] = int(send_summary.get("messages_verified") or 0)

@@ -17,6 +17,7 @@ class FakeBossClient:
     def __init__(self) -> None:
         self.message_id = "msg-1"
         self.message = "I am interested in this role"
+        self.message_type = "text"
 
     @property
     def request_stats(self):
@@ -57,7 +58,7 @@ class FakeBossClient:
                     "showText": self.message,
                     "msgTime": 1783917600000,
                     "msgId": self.message_id,
-                    "type": "text",
+                    "type": self.message_type,
                 },
             }
         ]
@@ -180,6 +181,43 @@ def test_dry_cycle_records_selection_without_queueing_and_is_idempotent(tmp_path
         assert selector.calls == 1
         assert store.queue_summary()["total"] == 0
         assert store.automation_summary(account_id=first["account_id"])["dry_run"] == 1
+
+
+def test_canary_friend_id_excludes_other_conversations(tmp_path):
+    selector = FixedSelector()
+    with init_db(tmp_path / "workflow.db") as store:
+        approved_template(store)
+        result = run_automation_cycle(
+            store,
+            FakeBossClient(),
+            Credential({"wt2": "test"}),
+            selector,
+            AutomationConfig(target_friend_id=999),
+        )
+
+        assert result["status"] == "needs_review"
+        assert result["eligible"] == 0
+        assert selector.calls == 0
+
+
+def test_contact_request_is_eligible_for_template_selection(tmp_path):
+    client = FakeBossClient()
+    client.message = "I want to exchange WeChat"
+    client.message_type = "contact_request"
+    selector = FixedSelector()
+    with init_db(tmp_path / "workflow.db") as store:
+        approved_template(store)
+        result = run_automation_cycle(
+            store,
+            client,
+            Credential({"wt2": "test"}),
+            selector,
+            AutomationConfig(target_friend_id=101),
+        )
+
+        assert result["eligible"] == 1
+        assert result["selected"] == 1
+        assert selector.calls == 1
 
 
 def test_low_confidence_selection_requires_review(tmp_path):

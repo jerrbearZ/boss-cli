@@ -229,6 +229,12 @@ def _render_sync(data: dict[str, Any]) -> None:
 @click.option("--poll-interval", default=30.0, type=click.FloatRange(min=1), show_default=True, help="Seconds between inbox probes")
 @click.option("--error-backoff", default=120.0, type=click.FloatRange(min=1), show_default=True, help="Seconds to wait after a failed cycle")
 @click.option("--candidate-limit", default=20, type=click.IntRange(min=1), show_default=True, help="Maximum new inbound conversations decided per cycle")
+@click.option(
+    "--friend-id",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Restrict decisions and queue execution to one BOSS friendId canary",
+)
 @click.option("--max-actions", default=10, type=click.IntRange(min=0), show_default=True, help="Maximum queued actions executed per cycle")
 @click.option("--action-delay", default=1.0, type=click.FloatRange(min=0), show_default=True, help="Delay between browser write actions")
 @click.option("--confidence-threshold", default=0.75, type=click.FloatRange(min=0, max=1), show_default=True)
@@ -246,6 +252,7 @@ def daemon_command(
     poll_interval: float,
     error_backoff: float,
     candidate_limit: int,
+    friend_id: int | None,
     max_actions: int,
     action_delay: float,
     confidence_threshold: float,
@@ -276,6 +283,7 @@ def daemon_command(
         poll_interval_seconds=poll_interval,
         error_backoff_seconds=error_backoff,
         candidate_limit=candidate_limit,
+        target_friend_id=friend_id,
         max_actions_per_cycle=max_actions,
         action_delay_seconds=action_delay,
         confidence_threshold=confidence_threshold,

@@ -47,6 +47,7 @@ def send_queued_actions(
     wechat_send_func: WechatSendFunc | None = None,
     message_preflight_func: MessagePreflightFunc | None = None,
     account_id: int | None = None,
+    candidate_id: int | None = None,
     requested_by: str = "dashboard",
 ) -> dict[str, Any]:
     """Run eligible actions one at a time and stop on an uncertain outcome."""
@@ -79,7 +80,11 @@ def send_queued_actions(
                 stop_reason = "paused"
                 break
 
-            action = store.claim_next_action(worker_id=run_id, account_id=account_id)
+            action = store.claim_next_action(
+                worker_id=run_id,
+                account_id=account_id,
+                candidate_id=candidate_id,
+            )
             if action is None:
                 break
             summary["claimed"] += 1

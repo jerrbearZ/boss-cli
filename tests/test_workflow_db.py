@@ -419,6 +419,35 @@ def test_action_claim_and_terminal_states_are_persisted(tmp_path):
         store.close()
 
 
+def test_action_claim_can_be_scoped_to_one_candidate(tmp_path):
+    store = init_db(tmp_path / "workflow.db")
+    try:
+        account_id = store.upsert_account(account_hash="account")
+        first_candidate = store.upsert_candidate(account_id=account_id, friend_id=1001)
+        canary_candidate = store.upsert_candidate(account_id=account_id, friend_id=1002)
+        template_id = store.upsert_template(name="first", version="v1", body="hello")
+        first_action = store.enqueue_action(
+            candidate_id=first_candidate,
+            action_type="send_message",
+            template_id=template_id,
+            idempotency_key="first-key",
+        )
+        canary_action = store.enqueue_action(
+            candidate_id=canary_candidate,
+            action_type="send_message",
+            template_id=template_id,
+            idempotency_key="canary-key",
+        )
+
+        claimed = store.claim_next_action(worker_id="worker", candidate_id=canary_candidate)
+
+        assert claimed is not None
+        assert claimed["id"] == canary_action
+        assert store.get_action(first_action)["status"] == "queued"
+    finally:
+        store.close()
+
+
 def test_expired_sending_lease_requires_manual_review(tmp_path):
     store = init_db(tmp_path / "workflow.db")
     try:
