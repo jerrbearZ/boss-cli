@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import signal
 import sys
+from threading import Event
 from pathlib import Path
 from typing import Any
 
@@ -15,8 +18,16 @@ from ..auth import Credential, load_from_env
 from ..client import BossClient
 from ..constants import CREDENTIAL_FILE
 from ..workflow import init_db
+from ..workflow.automation import AutomationConfig, run_automation_cycle, run_daemon
 from ..workflow.poller import sync_inbox
-from ._common import _output_structured, console, handle_command, require_auth, structured_output_options
+from ..workflow.selector import OpenAIResponsesSelector
+from ._common import (
+    _output_structured,
+    console,
+    handle_command,
+    require_auth,
+    structured_output_options,
+)
 
 
 DEFAULT_RULES: dict[str, Any] = {
@@ -160,6 +171,129 @@ def _render_sync(data: dict[str, Any]) -> None:
         f"{data.get('candidates_upserted')} messages_inserted={data.get('messages_inserted')} "
         f"history={data.get('history_conversations')} errors={data.get('errors')}"
     )
+
+
+@workflow.command("daemon")
+@click.option("--db", "db_path", type=click.Path(dir_okay=False, path_type=Path), default=None, help="SQLite workflow database path")
+@click.option("--model", default=lambda: os.environ.get("BOSS_LLM_MODEL", ""), help="OpenAI model used only to select approved templates")
+@click.option("--api-base", default=lambda: os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"), show_default=True)
+@click.option("--poll-interval", default=30.0, type=click.FloatRange(min=1), show_default=True, help="Seconds between inbox probes")
+@click.option("--error-backoff", default=120.0, type=click.FloatRange(min=1), show_default=True, help="Seconds to wait after a failed cycle")
+@click.option("--candidate-limit", default=20, type=click.IntRange(min=1), show_default=True, help="Maximum new inbound conversations decided per cycle")
+@click.option("--max-actions", default=10, type=click.IntRange(min=0), show_default=True, help="Maximum queued actions executed per cycle")
+@click.option("--action-delay", default=1.0, type=click.FloatRange(min=0), show_default=True, help="Delay between browser write actions")
+@click.option("--confidence-threshold", default=0.75, type=click.FloatRange(min=0, max=1), show_default=True)
+@click.option("--max-pages", default=3, type=click.IntRange(min=1), show_default=True, help="Maximum inbox pages read per probe")
+@click.option("--history-budget", default=20, type=click.IntRange(min=0), show_default=True, help="Maximum changed conversations enriched per probe")
+@click.option("--request-wechat/--no-request-wechat", default=True, show_default=True)
+@click.option("--live", is_flag=True, help="Actually send approved replies and WeChat requests; default is decision-only dry mode")
+@click.option("--once", is_flag=True, help="Run exactly one cycle and exit")
+@click.option("--allow-browser-auth", is_flag=True, help="Allow browser Cookie extraction if saved credentials are unavailable")
+@structured_output_options
+def daemon_command(
+    db_path: Path | None,
+    model: str,
+    api_base: str,
+    poll_interval: float,
+    error_backoff: float,
+    candidate_limit: int,
+    max_actions: int,
+    action_delay: float,
+    confidence_threshold: float,
+    max_pages: int,
+    history_budget: int,
+    request_wechat: bool,
+    live: bool,
+    once: bool,
+    allow_browser_auth: bool,
+    as_json: bool,
+    as_yaml: bool,
+) -> None:
+    """Continuously probe the Boss inbox and select only approved replies."""
+    if (as_json or as_yaml) and not once:
+        raise click.ClickException("--json and --yaml require --once for daemon output")
+    try:
+        selector = OpenAIResponsesSelector(model=model, base_url=api_base)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    credential = _get_workflow_credential(
+        allow_browser_auth=allow_browser_auth,
+        as_json=as_json,
+        as_yaml=as_yaml,
+    )
+    config = AutomationConfig(
+        live=live,
+        request_wechat=request_wechat,
+        poll_interval_seconds=poll_interval,
+        error_backoff_seconds=error_backoff,
+        candidate_limit=candidate_limit,
+        max_actions_per_cycle=max_actions,
+        action_delay_seconds=action_delay,
+        confidence_threshold=confidence_threshold,
+        max_pages=max_pages,
+        history_budget=history_budget,
+    )
+    stop_event = Event()
+
+    def _stop(_signum: int, _frame: object) -> None:
+        stop_event.set()
+
+    previous_handlers: dict[int, Any] = {}
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        previous_handlers[signum] = signal.signal(signum, _stop)
+
+    try:
+        with init_db(db_path) as store:
+            def _cycle() -> dict[str, Any]:
+                def _with_client(client: BossClient) -> dict[str, Any]:
+                    effective = client.credential if isinstance(client.credential, Credential) else credential
+                    result = run_automation_cycle(
+                        store,
+                        client,
+                        effective,
+                        selector,
+                        config,
+                        stop_requested=stop_event.is_set,
+                    )
+                    if not once and sys.stdout.isatty():
+                        console.print(
+                            f"cycle={result['status']} eligible={result['eligible']} "
+                            f"sent={result['sent']} wechat={result['wechat_verified']}"
+                        )
+                    return result
+
+                with BossClient(credential) as client:
+                    return _with_client(client)
+
+            result = run_daemon(store, _cycle, config, stop_event=stop_event, once=once)
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
+    finally:
+        for signum, previous in previous_handlers.items():
+            signal.signal(signum, previous)
+
+    if result["failures"]:
+        raise click.ClickException(f"automation cycle failed: {result['last_result'].get('error_code')}")
+    if as_json or as_yaml or not sys.stdout.isatty():
+        _output_structured(result, as_json=as_json, as_yaml=as_yaml)
+        return
+    console.print(
+        f"[bold cyan]Automation stopped[/bold cyan] mode={'live' if live else 'dry'} "
+        f"cycles={result['cycles']} failures={result['failures']}"
+    )
+
+
+@workflow.command("daemon-status")
+@click.option("--db", "db_path", type=click.Path(dir_okay=False, path_type=Path), default=None, help="SQLite workflow database path")
+@structured_output_options
+def daemon_status_command(db_path: Path | None, as_json: bool, as_yaml: bool) -> None:
+    """Show the persisted daemon heartbeat and most recent cycle."""
+    with init_db(db_path) as store:
+        data = store.get_daemon_state() or {"status": "not_started"}
+    if as_json or as_yaml or not sys.stdout.isatty():
+        _output_structured(data, as_json=as_json, as_yaml=as_yaml)
+        return
+    console.print(f"status={data.get('status')} heartbeat={data.get('heartbeat_at') or '-'}")
 
 
 @workflow.command("dry-run")

@@ -47,9 +47,10 @@ def send_queued_actions(
     wechat_send_func: WechatSendFunc | None = None,
     message_preflight_func: MessagePreflightFunc | None = None,
     account_id: int | None = None,
+    requested_by: str = "dashboard",
 ) -> dict[str, Any]:
     """Run eligible actions one at a time and stop on an uncertain outcome."""
-    run_id = store.create_run(run_type="send", requested_by="dashboard", account_id=account_id)
+    run_id = store.create_run(run_type="send", requested_by=requested_by, account_id=account_id)
     message_sender = send_func or _message_sender(engine)
     wechat_sender = wechat_send_func or _wechat_sender(engine)
     preflight = message_preflight_func or _latest_message_matches
