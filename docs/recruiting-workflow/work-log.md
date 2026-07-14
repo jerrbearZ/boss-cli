@@ -50,6 +50,18 @@
   exchange, one older terminal failure, and no queued/locked/sending actions.
 - The API key remains absent from repository files and the daemon remains stopped.
 
+### Mac Continuous-Daemon Smoke Test
+
+- Assessed Windows portability. Core libraries have Windows support, but the repo lacks Windows CI, verified
+  DPAPI cookie extraction, an interactive-session supervisor, and a real Windows browser acceptance test.
+- Started the daemon on macOS in dry mode with one `friendId` canary, a two-second poll interval, and
+  `max-actions=0`.
+- Completed three polling cycles with `failures=0`, `eligible=0`, `sent=0`, and `wechat_verified=0`.
+- Confirmed the running lease, owner ID, heartbeat, completed cycle state, and next-poll timestamp through
+  both `daemon-status` and the dashboard health endpoint.
+- Sent `SIGINT`; the process exited `0`, recorded `stopped`, cleared its owner and lease, and left no next poll.
+- Queue and delivery counts were unchanged by the dry run. No message or WeChat action was performed.
+
 ## 2026-07-14: Continuous Automation Pivot
 
 ### Process

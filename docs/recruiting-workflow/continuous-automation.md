@@ -136,6 +136,39 @@ The candidate-isolated live canary completed on 2026-07-15:
 - The final canary cycle completed with no stop reason, the daemon released its lease, and no executable
   canary actions remained queued.
 
+## Platform Deployment Status
+
+### macOS
+
+The current implementation is validated on macOS. A bounded dry deployment smoke test on 2026-07-15 ran
+three continuous polling cycles with zero failures and no outbound actions. While running, the daemon owned
+one lease and published fresh heartbeats to SQLite and the dashboard. `SIGINT` stopped it with exit code `0`,
+cleared the owner and lease, and left queue and delivery counts unchanged.
+
+### Windows
+
+The application components are plausibly Windows-compatible but the repository is not yet certified for
+production Windows deployment. Python, SQLite, `SIGINT`/`SIGTERM`, browser-cookie3, and Camoufox all have
+Windows paths or support, but the complete workflow has not run in Windows CI or against a real Windows
+BOSS browser session.
+
+Windows deployment requires these additional acceptance gates:
+
+- Add a Windows CI job for installation, migrations, CLI tests, and the full unit suite.
+- Validate Chrome/Edge cookie extraction and DPAPI behavior with the browser both open and closed.
+- Validate `python -m camoufox fetch`, browser startup, message verification, and the full `换微信` flow.
+- Run the daemon under an interactive logged-in desktop session. The current headful browser flow is not
+  suitable for a Session 0 Windows service.
+- Add a supported supervisor definition, such as Task Scheduler at user logon or a service wrapper that can
+  launch in the interactive user session, with restart and graceful-stop behavior.
+- Store Alibaba and BOSS credentials through a Windows secret mechanism rather than checked-in files or
+  machine-wide plaintext environment variables.
+- Decide whether to retain the cross-platform `~/.local/share/boss-cli` default or adopt `%LOCALAPPDATA%` on
+  Windows, including a migration plan for existing databases.
+
+Until these gates pass, use the validated Mac runtime for live operation and treat Windows as an engineering
+target rather than a deployable production platform.
+
 ## Operations
 
 ### 1. Prepare authentication and state
