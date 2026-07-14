@@ -26,13 +26,29 @@
 - Local database and dashboard both reported six active curated templates.
 - Repository scan confirmed that the supplied API key was not written into tracked or untracked project files.
 
-### Next Step
+### Live Acceptance Test
 
-- Run one candidate-isolated live canary through the continuous daemon.
-- Require one exact approved message to verify before its dependent browser-backed `换微信` action runs.
-- Treat `messages_verified=1` and `wechat_verified=1` for the same run as the acceptance gate.
-- Add candidate-scoped canary targeting first; `--candidate-limit 1` alone does not identify a safe test target.
-- Rotate the plaintext-shared API credential before live execution.
+- Added `--friend-id` so both LLM decisions and queue claims can be restricted to one canary conversation.
+- Added inbound `contact_request` eligibility so a candidate's structured WeChat request reaches the selector.
+- A dry canary selected `wechat_candidate_requested` (template ID 5) with `0.95` confidence and queued nothing.
+- Browser target resolution matched the intended conversation before live mode.
+- The exact approved reply was sent through `dom.chat-composer` and verified by the latest-message API.
+- The first WeChat attempt stopped because the BOSS UI now requires `同意` before `确定`; no success state
+  was observed and the adapter did not claim verification.
+- Updated the flow to `换微信` -> `同意` -> `确定`, added completed-exchange indicators, and retried only the
+  dependent WeChat action. The already verified reply was not repeated.
+- The dependent action verified through the visible `查看微信` indicator. Final states were message
+  `verified`, WeChat `verified`, no executable canary queue rows, and daemon `stopped`.
+
+### Additional Hardening
+
+- Missing browser extras now produce `failed_retryable` without cancelling the dependent action.
+- Credential health now checks the recruiter API; the live account reports `authenticated=true` even though
+  the optional JS-generated token remains unavailable to one job-search endpoint.
+- Final verification: `192 passed, 7 skipped`, Ruff passed, and wheel/source builds passed.
+- Dashboard cumulative delivery state after the canary: three verified messages, one verified WeChat
+  exchange, one older terminal failure, and no queued/locked/sending actions.
+- The API key remains absent from repository files and the daemon remains stopped.
 
 ## 2026-07-14: Continuous Automation Pivot
 

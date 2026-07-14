@@ -122,7 +122,19 @@ Two synthetic, non-candidate conversations verified the complete model boundary:
 - A question about the business and role selected approved template ID 8, `automotive_warranty_role_context`.
 - Both calls returned valid JSON, selected only IDs from the six active approved templates, and passed local
   outcome, confidence, and catalog validation.
-- The daemon remained `not_started`; no BOSS conversation was read and no outbound action was performed.
+
+The candidate-isolated live canary completed on 2026-07-15:
+
+- `--friend-id` constrained both decision eligibility and queue claiming to one consenting conversation.
+- Qwen selected `wechat_candidate_requested` (template ID 5) with `0.95` confidence.
+- The exact approved message `可以，方便的话我们交换一下微信。` was sent through `dom.chat-composer`
+  and matched by the BOSS latest-message API before the dependent action was eligible.
+- The browser then executed `换微信` -> `同意` -> `确定` and verified the completed exchange through the
+  visible `查看微信` indicator.
+- The message and WeChat actions both finished as `verified`, with the WeChat action depending on the message
+  action and a later verification timestamp.
+- The final canary cycle completed with no stop reason, the daemon released its lease, and no executable
+  canary actions remained queued.
 
 ## Operations
 
@@ -209,12 +221,19 @@ then the dependent visible `换微信` control is executed and verified for the 
 
 1. Rotate the credential used for the synthetic test and expose the replacement as `DASHSCOPE_API_KEY` only
    in the test process environment.
-2. Confirm BOSS authentication is valid and identify one consenting test conversation by `friendId`.
-3. Confirm the daemon is stopped and the queue contains no older `queued`, `locked`, `sending`, or
+2. Install the browser extra and Camoufox runtime used by live execution:
+
+```bash
+uv sync --extra browser
+uv run python -m camoufox fetch
+```
+
+3. Confirm BOSS authentication is valid and identify one consenting test conversation by `friendId`.
+4. Confirm the daemon is stopped and the queue contains no older `queued`, `locked`, `sending`, or
    `failed_retryable` actions.
-4. Isolate the canary candidate with `--friend-id <friendId>`. `--candidate-limit 1` alone selects the oldest
+5. Isolate the canary candidate with `--friend-id <friendId>`. `--candidate-limit 1` alone selects the oldest
    eligible inbound conversation and is not a safe substitute for explicit canary targeting.
-5. Resolve the exact target without sending:
+6. Resolve the exact target without sending:
 
 ```bash
 boss recruiter reply-browser <friendId> '<approved-template-body>' --dry-run --json
@@ -262,6 +281,7 @@ The CLI is a continuous foreground process. Reboot restart and crash restart req
 ## Failure Policy
 
 - Model transport failure or incomplete provider response: fail the cycle, record daemon error state, wait for error backoff, and retry without consuming the candidate trigger.
+- Missing or failed browser runtime: leave the message retryable and keep its dependent WeChat action queued.
 - Invalid or unsafe model output: record `review`; never queue.
 - No approved templates: sync succeeds, cycle records `needs_review`, and no model call occurs.
 - BOSS authentication failure: cycle fails and backs off; perform login and restart if credentials cannot recover.
@@ -288,9 +308,8 @@ It remains a trusted localhost application without user authentication. Do not b
 - Browser UI selectors may change when BOSS Web changes.
 - The dashboard does not resolve review decisions or retry individual actions yet.
 - Process supervision, secrets management, and OS startup installation are deployment responsibilities.
-- The Qwen transport and selection boundary are validated; the new Qwen-driven browser reply and dependent
-  WeChat exchange still require the controlled live canary above.
+- One Qwen-driven browser reply and its dependent WeChat exchange have passed the controlled live canary.
 
 ## Verification Baseline
 
-The implementation includes tests for schema migration, approved-ID constraints, malformed output, transient retry behavior, dry/live isolation, low-confidence review, decision idempotency, catalog reconsideration, pause behavior, message-to-WeChat dependency order, immutable template replacement, lease exclusion, and removal of manual dashboard execution endpoints.
+The implementation includes tests for schema migration, approved-ID constraints, malformed output, transient retry behavior, dry/live isolation, low-confidence review, decision idempotency, catalog reconsideration, pause behavior, candidate-scoped queue claims, contact-request eligibility, message-to-WeChat dependency order, the `换微信` consent sequence, retryable browser setup failures, immutable template replacement, lease exclusion, and removal of manual dashboard execution endpoints. The current clean Python 3.13 baseline is `192 passed, 7 skipped`.
