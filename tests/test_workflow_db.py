@@ -133,6 +133,35 @@ def test_candidate_sync_upsert_preserves_operator_owned_state(tmp_path):
         store.close()
 
 
+def test_candidate_sync_does_not_regress_activity_or_erase_identifiers(tmp_path):
+    store = init_db(tmp_path / "workflow.db")
+    try:
+        account_id = store.upsert_account(account_hash="account")
+        candidate_id = store.upsert_candidate(
+            account_id=account_id,
+            friend_id=1001,
+            encrypt_uid="stable-encrypt-id",
+            job_name="Sales",
+            last_seen_at="2026-07-14T10:00:00Z",
+        )
+        store.upsert_candidate(
+            account_id=account_id,
+            friend_id=1001,
+            encrypt_uid="",
+            job_name="",
+            last_seen_at="2026-07-13T10:00:00Z",
+        )
+
+        candidate = store.get_candidate(candidate_id)
+
+        assert candidate is not None
+        assert candidate["encrypt_uid"] == "stable-encrypt-id"
+        assert candidate["job_name"] == "Sales"
+        assert candidate["last_seen_at"] == "2026-07-14T10:00:00Z"
+    finally:
+        store.close()
+
+
 def test_stable_account_identity_promotes_cookie_account(tmp_path):
     store = init_db(tmp_path / "workflow.db")
     try:

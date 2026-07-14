@@ -348,15 +348,18 @@ class WorkflowStore:
             )
             ON CONFLICT(account_id, friend_id, friend_source) DO UPDATE SET
               uid=COALESCE(excluded.uid, candidates.uid),
-              encrypt_uid=COALESCE(excluded.encrypt_uid, candidates.encrypt_uid),
-              encrypt_geek_id=COALESCE(excluded.encrypt_geek_id, candidates.encrypt_geek_id),
+              encrypt_uid=COALESCE(NULLIF(excluded.encrypt_uid, ''), candidates.encrypt_uid),
+              encrypt_geek_id=COALESCE(NULLIF(excluded.encrypt_geek_id, ''), candidates.encrypt_geek_id),
               security_id_present=excluded.security_id_present,
               job_id=COALESCE(excluded.job_id, candidates.job_id),
-              encrypt_job_id=COALESCE(excluded.encrypt_job_id, candidates.encrypt_job_id),
-              job_name=COALESCE(excluded.job_name, candidates.job_name),
-              name_redacted=COALESCE(excluded.name_redacted, candidates.name_redacted),
-              name_hash=COALESCE(excluded.name_hash, candidates.name_hash),
-              last_seen_at=excluded.last_seen_at,
+              encrypt_job_id=COALESCE(NULLIF(excluded.encrypt_job_id, ''), candidates.encrypt_job_id),
+              job_name=COALESCE(NULLIF(excluded.job_name, ''), candidates.job_name),
+              name_redacted=COALESCE(NULLIF(excluded.name_redacted, ''), candidates.name_redacted),
+              name_hash=COALESCE(NULLIF(excluded.name_hash, ''), candidates.name_hash),
+              last_seen_at=CASE
+                WHEN candidates.last_seen_at > excluded.last_seen_at THEN candidates.last_seen_at
+                ELSE excluded.last_seen_at
+              END,
               last_inbound_at=COALESCE(excluded.last_inbound_at, candidates.last_inbound_at),
               last_outbound_at=COALESCE(excluded.last_outbound_at, candidates.last_outbound_at),
               last_message_preview=COALESCE(excluded.last_message_preview, candidates.last_message_preview),

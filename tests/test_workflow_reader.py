@@ -49,6 +49,7 @@ class FakeReadClient:
         self.history_calls: list[int] = []
         self.request_count = 0
         self.fail_page: int | None = None
+        self.fail_jobs = False
 
     @property
     def request_stats(self) -> dict[str, int]:
@@ -60,6 +61,8 @@ class FakeReadClient:
 
     def get_boss_chatted_jobs(self):
         self.request_count += 1
+        if self.fail_jobs:
+            raise RuntimeError("jobs unavailable")
         return self.jobs
 
     def get_boss_friend_list(self, label_id=0, enc_job_id="", sort="", page=1):
@@ -198,6 +201,25 @@ def test_history_budget_marks_remaining_conversations_deferred(tmp_path):
         store.close()
 
 
+def test_deferred_history_is_drained_on_later_runs(tmp_path):
+    client = FakeReadClient()
+    store = init_db(tmp_path / "workflow.db")
+    try:
+        first = sync_inbox(store, client, Credential({"wt2": "cookie"}), history_budget=1)
+        second = sync_inbox(store, client, Credential({"wt2": "cookie"}), history_budget=1)
+        statuses = [
+            row["history_sync_status"]
+            for row in store.conn.execute("SELECT history_sync_status FROM candidates ORDER BY id").fetchall()
+        ]
+
+        assert first["history_deferred"] == 2
+        assert second["history_conversations"] == 1
+        assert statuses.count("synced") == 2
+        assert statuses.count("deferred") == 1
+    finally:
+        store.close()
+
+
 def test_missing_candidate_detail_is_isolated_and_audited(tmp_path):
     client = FakeReadClient()
     del client.details[102]
@@ -248,6 +270,54 @@ def test_complete_full_scan_marks_missing_candidate_inactive(tmp_path):
 
         assert result["inactive_candidates"] == 2
         assert inactive["count"] == 2
+    finally:
+        store.close()
+
+
+def test_failed_optional_job_read_does_not_deactivate_jobs(tmp_path):
+    client = FakeReadClient()
+    store = init_db(tmp_path / "workflow.db")
+    try:
+        sync_inbox(store, client, Credential({"wt2": "cookie"}), history_mode="none", full_scan=True)
+        client.fail_jobs = True
+        sync_inbox(store, client, Credential({"wt2": "cookie"}), history_mode="none", full_scan=True)
+
+        job = store.conn.execute("SELECT * FROM jobs WHERE enc_job_id='job-1'").fetchone()
+
+        assert job is not None
+        assert job["active"] == 1
+        assert job["inactive_at"] is None
+    finally:
+        store.close()
+
+
+def test_empty_inbox_still_synchronizes_jobs(tmp_path):
+    client = FakeReadClient()
+    client.pages = {1: {"result": [], "hasMore": False}}
+    store = init_db(tmp_path / "workflow.db")
+    try:
+        result = sync_inbox(store, client, Credential({"wt2": "cookie"}), history_mode="none")
+
+        assert result["complete_scan"] is True
+        assert result["jobs_upserted"] == 1
+        assert store.row_count("jobs") == 1
+    finally:
+        store.close()
+
+
+def test_duplicate_page_checkpoint_restarts_at_first_page(tmp_path):
+    client = FakeReadClient()
+    repeated = {"result": [{"friendId": 101}]}
+    client.pages = {1: repeated, 2: repeated}
+    store = init_db(tmp_path / "workflow.db")
+    try:
+        first = sync_inbox(store, client, Credential({"wt2": "cookie"}), history_mode="none")
+        client.page_calls.clear()
+        second = sync_inbox(store, client, Credential({"wt2": "cookie"}), history_mode="none")
+
+        assert first["stop_reason"] == "duplicate_page"
+        assert second["resumed"] is False
+        assert client.page_calls[0] == 1
     finally:
         store.close()
 

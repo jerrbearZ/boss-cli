@@ -116,6 +116,7 @@ def sync_inbox(
     recruiter_user_id: int | None = None
     jobs_payload: list[dict[str, Any]] = []
     jobs_loaded = False
+    jobs_persisted = False
     history_remaining = options.history_budget
     filter_hash = stable_json_hash({"enc_job_id": enc_job_id, "label_id": label_id})
     page = 1
@@ -124,7 +125,7 @@ def sync_inbox(
     scan_complete = False
 
     try:
-        user_info = _optional_call(client, "get_user_info", default={})
+        user_info, _ = _optional_call(client, "get_user_info", default={})
         recruiter_user_id = extract_recruiter_user_id_from_user_info(user_info)
         if recruiter_user_id:
             account_id = store.resolve_account(
@@ -136,10 +137,9 @@ def sync_inbox(
             summary["account_id"] = account_id
             page, summary["resumed"] = _resume_page(store, account_id, filter_hash, options.resume)
 
-        jobs_value = _optional_call(client, "get_boss_chatted_jobs", default=[])
+        jobs_value, jobs_loaded = _optional_call(client, "get_boss_chatted_jobs", default=[])
         if isinstance(jobs_value, list):
             jobs_payload = [item for item in jobs_value if isinstance(item, dict)]
-            jobs_loaded = hasattr(client, "get_boss_chatted_jobs")
 
         while summary["pages"] < options.max_pages:
             if options.limit and summary["seen"] >= options.limit:
@@ -185,8 +185,9 @@ def sync_inbox(
                 store.attach_run_account(run_id, account_id)
                 summary["account_id"] = account_id
 
-            if not summary["jobs_upserted"]:
+            if not jobs_persisted:
                 summary["jobs_upserted"] = _persist_jobs(store, jobs_payload, account_id, run_id)
+                jobs_persisted = True
 
             last_by_uid = index_last_messages(last_messages)
             details_by_friend = {
@@ -238,8 +239,9 @@ def sync_inbox(
                     changed = previous is None or previous.get("last_message_fingerprint") != latest_fingerprint
                     history_rows: list[dict[str, Any]] = []
                     history_status = str(previous.get("history_sync_status") or "pending") if previous else "pending"
+                    needs_history = previous is None or history_status in {"pending", "deferred", "failed"}
                     should_read_history = options.history_mode == "all" or (
-                        options.history_mode == "changed" and changed
+                        options.history_mode == "changed" and (changed or needs_history)
                     )
                     if should_read_history and history_remaining > 0 and hasattr(client, "get_boss_chat_history"):
                         history_rows = _read_history(
@@ -332,12 +334,14 @@ def sync_inbox(
             )
             store.attach_run_account(run_id, account_id)
             summary["account_id"] = account_id
+        if not jobs_persisted:
             summary["jobs_upserted"] = _persist_jobs(store, jobs_payload, account_id, run_id)
+            jobs_persisted = True
 
         if summary["pages"] >= options.max_pages and not scan_complete and stop_reason is None:
             stop_reason = "max_pages_reached"
 
-        if scan_complete:
+        if scan_complete or stop_reason == "duplicate_page":
             store.set_sync_checkpoint(
                 account_id=account_id,
                 stream="inbox",
@@ -601,14 +605,14 @@ def _has_more(payload: Any) -> bool | None:
     return None
 
 
-def _optional_call(client: BossReadGateway, method_name: str, *, default: Any) -> Any:
+def _optional_call(client: BossReadGateway, method_name: str, *, default: Any) -> tuple[Any, bool]:
     method = getattr(client, method_name, None)
     if method is None:
-        return default
+        return default, False
     try:
-        return method()
+        return method(), True
     except Exception:  # noqa: BLE001 - optional enrichment cannot block core inbox reads.
-        return default
+        return default, False
 
 
 def _request_count(client: BossReadGateway) -> int:
