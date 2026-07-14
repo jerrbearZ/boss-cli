@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Literal, TypedDict
 
 DecisionValue = Literal["send", "skip_duplicate", "needs_review", "rejected", "error"]
+ActionType = Literal["send_message", "exchange_wechat"]
 ActionStatus = Literal[
     "queued",
     "locked",
@@ -48,3 +49,7 @@ ALL_ACTION_STATUSES: tuple[ActionStatus, ...] = (
     "cancelled",
     "needs_review",
 )
+
+SEND_MESSAGE = "send_message"
+EXCHANGE_WECHAT = "exchange_wechat"
+ALL_ACTION_TYPES: tuple[ActionType, ...] = (SEND_MESSAGE, EXCHANGE_WECHAT)

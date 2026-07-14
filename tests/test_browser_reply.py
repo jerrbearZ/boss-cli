@@ -8,6 +8,9 @@ from click.testing import CliRunner
 from boss_cli.browser_reply import (
     BrowserReplyError,
     BrowserReplyResult,
+    BrowserReplyTarget,
+    _request_wechat_from_page,
+    request_wechat_via_browser,
     resolve_browser_reply_target,
 )
 from boss_cli.cli import cli
@@ -119,3 +122,79 @@ def test_recruiter_reply_browser_invokes_browser_adapter():
     assert message == "hello"
     data = json.loads(result.output)
     assert data["data"]["verified"] is True
+
+
+def test_request_wechat_browser_returns_verified_result():
+    credential = MagicMock()
+    target = BrowserReplyTarget(friend_id=123, friend_source=0, encrypt_uid="enc-uid")
+    with patch(
+        "boss_cli.browser_reply._request_wechat_once_with_engine",
+        return_value=("dom.exchange-wechat", {"matched": True, "indicator": "等待对方同意"}),
+    ) as request:
+        result = request_wechat_via_browser(credential, target, engine="camoufox")
+
+    request.assert_called_once()
+    assert result.ok is True
+    assert result.requested is True
+    assert result.verified is True
+    assert result.method == "dom.exchange-wechat"
+
+
+def test_request_wechat_dom_requires_visible_success_change():
+    class FakeControl:
+        def __init__(self, conversation):
+            self.conversation = conversation
+            self.last = self
+
+        def count(self):
+            return 1
+
+        def is_visible(self, timeout=0):
+            return True
+
+        def click(self, timeout=0):
+            self.conversation.clicked = True
+
+    class EmptyControl:
+        last = None
+
+        def __init__(self):
+            self.last = self
+
+        def count(self):
+            return 0
+
+        def is_visible(self, timeout=0):
+            return False
+
+    class FakeConversation:
+        def __init__(self):
+            self.clicked = False
+
+        def inner_text(self, timeout=0):
+            return "等待对方同意" if self.clicked else "换微信"
+
+        def get_by_text(self, label, exact=True):
+            return FakeControl(self) if label == "换微信" else EmptyControl()
+
+    class FakePage:
+        def __init__(self):
+            self.conversation = FakeConversation()
+
+        def get_by_text(self, label, exact=True):
+            return EmptyControl()
+
+        def wait_for_timeout(self, timeout):
+            return None
+
+    page = FakePage()
+    target = BrowserReplyTarget(friend_id=123, friend_source=0, encrypt_uid="enc-uid")
+    with patch("boss_cli.browser_reply._prepare_chat_page"), patch(
+        "boss_cli.browser_reply._select_target_conversation",
+        return_value=page.conversation,
+    ):
+        method, verification = _request_wechat_from_page(page, target, timeout_ms=1000)
+
+    assert method == "dom.exchange-wechat"
+    assert verification["matched"] is True
+    assert verification["indicator"] == "等待对方同意"

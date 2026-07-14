@@ -14,7 +14,7 @@ from typing import Any, Iterator
 from .models import ALL_ACTION_STATUSES, QueueSummary
 from .redaction import redact_text, sha256_text, stable_json_dumps
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 MIGRATIONS_PATH = Path(__file__).with_name("migrations")
 
@@ -701,8 +701,9 @@ class WorkflowStore:
         *,
         candidate_id: int,
         action_type: str,
-        template_id: int,
         idempotency_key: str,
+        template_id: int | None = None,
+        depends_on_action_id: int | None = None,
         status: str = "queued",
         priority: int = 100,
         available_at: str | None = None,
@@ -712,13 +713,26 @@ class WorkflowStore:
         self.conn.execute(
             """
             INSERT INTO outbound_actions (
-              candidate_id, action_type, template_id, idempotency_key, status,
+              candidate_id, action_type, template_id, depends_on_action_id,
+              idempotency_key, status,
               priority, available_at, max_attempts, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(idempotency_key) DO NOTHING
             """,
-            (candidate_id, action_type, template_id, idempotency_key, status, priority, available_at, max_attempts, now, now),
+            (
+                candidate_id,
+                action_type,
+                template_id,
+                depends_on_action_id,
+                idempotency_key,
+                status,
+                priority,
+                available_at,
+                max_attempts,
+                now,
+                now,
+            ),
         )
         self._commit()
         row = self.conn.execute(
@@ -733,6 +747,7 @@ class WorkflowStore:
         worker_id: str,
         lease_seconds: int = 300,
         now: str | None = None,
+        account_id: int | None = None,
     ) -> dict[str, Any] | None:
         if self._transaction_depth > 0:
             raise RuntimeError("claim_next_action manages its own lease transaction")
@@ -740,16 +755,46 @@ class WorkflowStore:
         locked_until = _add_seconds(claim_time, lease_seconds)
         self.conn.execute("BEGIN IMMEDIATE")
         try:
-            row = self.conn.execute(
+            self.conn.execute(
                 """
-                SELECT *
-                FROM outbound_actions
-                WHERE status='queued'
-                  AND (available_at IS NULL OR available_at <= ?)
-                ORDER BY priority ASC, created_at ASC
+                UPDATE outbound_actions
+                SET status='queued', locked_by=NULL, locked_at=NULL, locked_until=NULL,
+                    updated_at=?
+                WHERE status='locked' AND locked_until IS NOT NULL AND locked_until < ?
+                """,
+                (claim_time, claim_time),
+            )
+            self.conn.execute(
+                """
+                UPDATE outbound_actions
+                SET status='needs_review', locked_by=NULL, locked_at=NULL,
+                    locked_until=NULL, last_error_code='expired_sending_lease',
+                    last_error_message_redacted='Sender stopped while action outcome was uncertain',
+                    updated_at=?
+                WHERE status='sending' AND locked_until IS NOT NULL AND locked_until < ?
+                """,
+                (claim_time, claim_time),
+            )
+            account_clause = "AND c.account_id=?" if account_id is not None else ""
+            params: list[Any] = [claim_time, claim_time]
+            if account_id is not None:
+                params.append(account_id)
+            row = self.conn.execute(
+                f"""
+                SELECT a.*
+                FROM outbound_actions a
+                JOIN candidates c ON c.id = a.candidate_id
+                LEFT JOIN outbound_actions dependency ON dependency.id = a.depends_on_action_id
+                WHERE a.status IN ('queued', 'failed_retryable')
+                  AND a.attempts < a.max_attempts
+                  AND (a.available_at IS NULL OR a.available_at <= ?)
+                  AND (a.next_retry_at IS NULL OR a.next_retry_at <= ?)
+                  AND (a.depends_on_action_id IS NULL OR dependency.status IN ('verified', 'skipped_duplicate'))
+                  {account_clause}
+                ORDER BY a.priority ASC, a.created_at ASC, a.id ASC
                 LIMIT 1
                 """,
-                (claim_time,),
+                params,
             ).fetchone()
             if row is None:
                 self.conn.commit()
@@ -828,9 +873,21 @@ class WorkflowStore:
         )
         self._commit()
 
-    def queue_summary(self) -> QueueSummary:
+    def queue_summary(self, *, account_id: int | None = None) -> QueueSummary:
         summary: QueueSummary = {status: 0 for status in ALL_ACTION_STATUSES}  # type: ignore[misc]
-        rows = self.conn.execute("SELECT status, COUNT(*) AS count FROM outbound_actions GROUP BY status").fetchall()
+        if account_id is None:
+            rows = self.conn.execute("SELECT status, COUNT(*) AS count FROM outbound_actions GROUP BY status").fetchall()
+        else:
+            rows = self.conn.execute(
+                """
+                SELECT a.status, COUNT(*) AS count
+                FROM outbound_actions a
+                JOIN candidates c ON c.id = a.candidate_id
+                WHERE c.account_id=?
+                GROUP BY a.status
+                """,
+                (account_id,),
+            ).fetchall()
         total = 0
         for row in rows:
             status = str(row["status"])
@@ -848,6 +905,32 @@ class WorkflowStore:
         ).fetchone()
         return row is not None
 
+    def has_verified_action(self, candidate_id: int, action_type: str) -> bool:
+        row = self.conn.execute(
+            """
+            SELECT 1
+            FROM outbound_actions
+            WHERE candidate_id=? AND action_type=? AND status IN ('verified', 'skipped_duplicate')
+            LIMIT 1
+            """,
+            (candidate_id, action_type),
+        ).fetchone()
+        return row is not None
+
+    def cancel_dependents(self, action_id: int, *, reason: str) -> int:
+        now = utc_now()
+        cursor = self.conn.execute(
+            """
+            UPDATE outbound_actions
+            SET status='cancelled', last_error_code='dependency_failed',
+                last_error_message_redacted=?, updated_at=?
+            WHERE depends_on_action_id=? AND status IN ('queued', 'failed_retryable')
+            """,
+            (redact_text(reason), now, action_id),
+        )
+        self._commit()
+        return int(cursor.rowcount)
+
     def mark_action_status(
         self,
         action_id: int,
@@ -857,6 +940,23 @@ class WorkflowStore:
         error_message: str | None = None,
     ) -> None:
         now = utc_now()
+        if status == "sending":
+            self.conn.execute(
+                """
+                UPDATE outbound_actions
+                SET status=?, last_error_code=?, last_error_message_redacted=?, updated_at=?
+                WHERE id=?
+                """,
+                (
+                    status,
+                    error_code,
+                    redact_text(error_message) if error_message else None,
+                    now,
+                    action_id,
+                ),
+            )
+            self._commit()
+            return
         self.conn.execute(
             """
             UPDATE outbound_actions
@@ -897,7 +997,7 @@ class WorkflowStore:
               t.body_hash AS template_body_hash
             FROM outbound_actions a
             JOIN candidates c ON c.id = a.candidate_id
-            JOIN message_templates t ON t.id = a.template_id
+            LEFT JOIN message_templates t ON t.id = a.template_id
             WHERE a.id=?
             """,
             (action_id,),
@@ -958,9 +1058,11 @@ class WorkflowStore:
             ).fetchone()
         return int(row["count"])
 
-    def list_queue(self, *, limit: int = 200) -> list[dict[str, Any]]:
+    def list_queue(self, *, limit: int = 200, account_id: int | None = None) -> list[dict[str, Any]]:
+        where = "WHERE c.account_id=?" if account_id is not None else ""
+        params: tuple[Any, ...] = (account_id, limit) if account_id is not None else (limit,)
         rows = self.conn.execute(
-            """
+            f"""
             SELECT
               a.*,
               c.name_redacted,
@@ -971,11 +1073,12 @@ class WorkflowStore:
               t.body AS template_body
             FROM outbound_actions a
             JOIN candidates c ON c.id = a.candidate_id
-            JOIN message_templates t ON t.id = a.template_id
+            LEFT JOIN message_templates t ON t.id = a.template_id
+            {where}
             ORDER BY a.created_at DESC
             LIMIT ?
             """,
-            (limit,),
+            params,
         ).fetchall()
         return [_row_to_dict(row) or {} for row in rows]
 
@@ -1199,6 +1302,13 @@ class WorkflowStore:
 
     def get_action(self, action_id: int) -> dict[str, Any] | None:
         row = self.conn.execute("SELECT * FROM outbound_actions WHERE id=?", (action_id,)).fetchone()
+        return _row_to_dict(row)
+
+    def get_action_by_idempotency_key(self, idempotency_key: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM outbound_actions WHERE idempotency_key=?",
+            (idempotency_key,),
+        ).fetchone()
         return _row_to_dict(row)
 
     def get_candidate(self, candidate_id: int) -> dict[str, Any] | None:

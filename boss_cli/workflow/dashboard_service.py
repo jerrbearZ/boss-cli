@@ -21,7 +21,7 @@ class DashboardService:
             "db": str(self.store.path),
             "schema_version": self.store.current_schema_version(),
             "paused": self.store.is_paused(),
-            "queue": self.store.queue_summary(),
+            "queue": self.store.queue_summary(account_id=account_id),
             "active_account_id": account_id,
             "candidate_count": self.store.candidate_count(account_id=account_id),
             "event_count": self.store.row_count("events"),
@@ -31,7 +31,7 @@ class DashboardService:
         return self.store.list_candidates(limit=limit, account_id=self._active_account_id())
 
     def queue(self, *, limit: int = 200) -> list[dict[str, Any]]:
-        return self.store.list_queue(limit=limit)
+        return self.store.list_queue(limit=limit, account_id=self._active_account_id())
 
     def events(self, *, limit: int = 200) -> list[dict[str, Any]]:
         return self.store.list_events(limit=limit)
@@ -70,11 +70,24 @@ class DashboardService:
         template = self.store.get_template(template_id)
         return template or {"id": template_id}
 
-    def enqueue(self, *, candidate_ids: list[int], template_id: int) -> dict[str, Any]:
+    def enqueue(
+        self,
+        *,
+        candidate_ids: list[int],
+        template_id: int | None,
+        send_message: bool = True,
+        request_wechat: bool = False,
+    ) -> dict[str, Any]:
+        account_id = self._active_account_id()
+        if account_id is None:
+            raise ValueError("Sync the inbox before queueing outbound actions")
         return enqueue_selected_candidates(
             self.store,
             candidate_ids=candidate_ids,
             template_id=template_id,
+            send_message=send_message,
+            request_wechat=request_wechat,
+            account_id=account_id,
             selection_source="dashboard",
         )
 

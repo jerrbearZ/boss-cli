@@ -47,6 +47,11 @@ class DashboardRuntime:
         credential = _load_dashboard_credential()
         if credential is None:
             raise DashboardError("No saved Boss credential. Run `boss login` first.", status=HTTPStatus.UNAUTHORIZED)
+        with init_db(self.db_path) as store:
+            raw_account_id = store.get_setting("active_account_id")
+            if raw_account_id is None:
+                raise DashboardError("Sync the inbox before running outbound actions")
+            account_id = int(raw_account_id)
 
         with self._lock:
             if self._sender_thread is not None and self._sender_thread.is_alive():
@@ -65,6 +70,7 @@ class DashboardRuntime:
                             engine=engine,
                             stop_requested=self._stop_event.is_set,
                             delay_seconds=delay_seconds,
+                            account_id=account_id,
                         )
                 except Exception as exc:  # noqa: BLE001 - surface worker errors to dashboard.
                     self.sender_error = str(exc)
@@ -167,16 +173,39 @@ def make_handler(runtime: DashboardRuntime) -> type[BaseHTTPRequestHandler]:
                     )
                     return
                 if parsed.path == "/api/enqueue":
+                    if payload.get("confirmed") is not True:
+                        raise DashboardError("Batch confirmation is required")
                     candidate_ids = [int(item) for item in payload.get("candidate_ids", [])]
-                    template_id = int(payload.get("template_id") or 0)
-                    self._send_json(self._with_store(lambda service: service.enqueue(candidate_ids=candidate_ids, template_id=template_id)))
+                    if not candidate_ids or len(candidate_ids) > 500:
+                        raise DashboardError("Select between 1 and 500 candidates")
+                    template_id = int(payload["template_id"]) if payload.get("template_id") else None
+                    send_message = bool(payload.get("send_message", True))
+                    request_wechat = bool(payload.get("request_wechat", False))
+                    self._send_json(
+                        self._with_store(
+                            lambda service: service.enqueue(
+                                candidate_ids=candidate_ids,
+                                template_id=template_id,
+                                send_message=send_message,
+                                request_wechat=request_wechat,
+                            )
+                        )
+                    )
                     return
                 if parsed.path == "/api/sender/start":
+                    if payload.get("confirmed") is not True:
+                        raise DashboardError("Queue-run confirmation is required")
+                    max_actions = int(payload.get("max_actions") or 5)
+                    delay_seconds = float(payload.get("delay_seconds") or 60)
+                    if not 1 <= max_actions <= 100:
+                        raise DashboardError("Action limit must be between 1 and 100")
+                    if not 1 <= delay_seconds <= 600:
+                        raise DashboardError("Delay must be between 1 and 600 seconds")
                     self._send_json(
                         runtime.start_sender(
-                            max_actions=int(payload.get("max_actions") or 5),
+                            max_actions=max_actions,
                             engine=str(payload.get("engine") or "camoufox"),
-                            delay_seconds=float(payload.get("delay_seconds") or 1),
+                            delay_seconds=delay_seconds,
                         )
                     )
                     return

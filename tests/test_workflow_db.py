@@ -21,7 +21,7 @@ def test_init_db_creates_expected_tables(tmp_path):
     finally:
         store.close()
 
-    assert schema_version == 3
+    assert schema_version == 4
     assert {
         "accounts",
         "jobs",
@@ -230,10 +230,60 @@ def test_v2_database_migrates_in_place(tmp_path):
     try:
         account = store.list_accounts()[0]
 
-        assert store.current_schema_version() == 3
+        assert store.current_schema_version() == 4
         assert account["account_hash"] == "existing"
         assert account["identity_source"] == "credential"
         assert "sync_checkpoints" in store.table_names()
+    finally:
+        store.close()
+
+
+def test_v3_actions_migrate_to_typed_nullable_actions(tmp_path):
+    db_path = tmp_path / "workflow.db"
+    root = Path(__file__).parents[1] / "boss_cli" / "workflow"
+    conn = sqlite3.connect(db_path)
+    conn.executescript((root / "schema.sql").read_text(encoding="utf-8"))
+    conn.executescript((root / "migrations" / "0003_incremental_reader.sql").read_text(encoding="utf-8"))
+    conn.execute(
+        """
+        INSERT INTO accounts(platform, account_hash, status, identity_source, created_at, updated_at)
+        VALUES ('boss', 'account', 'active', 'credential', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO candidates(account_id, friend_id, first_seen_at, last_seen_at, created_at, updated_at)
+        VALUES (1, 1001, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z',
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO message_templates(name, version, body, body_hash, created_at, updated_at)
+        VALUES ('reply', 'v1', 'hello', 'hash', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO outbound_actions(
+          candidate_id, action_type, template_id, idempotency_key, created_at, updated_at
+        ) VALUES (1, 'send_template', 1, 'legacy-key', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    store = init_db(db_path)
+    try:
+        action = store.get_action(1)
+        columns = {row["name"]: row for row in store.conn.execute("PRAGMA table_info(outbound_actions)")}
+
+        assert store.current_schema_version() == 4
+        assert action is not None
+        assert action["action_type"] == "send_message"
+        assert "depends_on_action_id" in columns
+        assert columns["template_id"]["notnull"] == 0
+        assert store.conn.execute("PRAGMA foreign_key_check").fetchall() == []
     finally:
         store.close()
 
@@ -365,6 +415,41 @@ def test_action_claim_and_terminal_states_are_persisted(tmp_path):
         store.close()
 
 
+def test_expired_sending_lease_requires_manual_review(tmp_path):
+    store = init_db(tmp_path / "workflow.db")
+    try:
+        account_id = store.upsert_account(account_hash="account")
+        candidate_id = store.upsert_candidate(account_id=account_id, friend_id=1001)
+        template_id = store.upsert_template(name="first", version="v1", body="hello")
+        action_id = store.enqueue_action(
+            candidate_id=candidate_id,
+            action_type="send_message",
+            template_id=template_id,
+            idempotency_key="lease-key",
+        )
+        claimed = store.claim_next_action(
+            worker_id="worker-1",
+            lease_seconds=60,
+            now="2026-07-12T00:00:00Z",
+        )
+        assert claimed is not None
+        store.mark_action_status(action_id, status="sending")
+
+        sending = store.get_action(action_id)
+        assert sending is not None
+        assert sending["locked_until"] == "2026-07-12T00:01:00Z"
+
+        next_action = store.claim_next_action(worker_id="worker-2", now="2026-07-12T00:02:00Z")
+        uncertain = store.get_action(action_id)
+
+        assert next_action is None
+        assert uncertain is not None
+        assert uncertain["status"] == "needs_review"
+        assert uncertain["last_error_code"] == "expired_sending_lease"
+    finally:
+        store.close()
+
+
 def test_append_event_redacts_summary(tmp_path):
     store = init_db(tmp_path / "workflow.db")
     try:
@@ -386,6 +471,6 @@ def test_workflow_init_db_command_outputs_json(tmp_path):
     payload = json.loads(result.output)
     assert payload["ok"] is True
     assert payload["data"]["db"] == str(db_path)
-    assert payload["data"]["schema_version"] == 3
+    assert payload["data"]["schema_version"] == 4
     assert "outbound_actions" in payload["data"]["tables"]
     assert db_path.exists()

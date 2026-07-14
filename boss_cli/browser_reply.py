@@ -59,6 +59,23 @@ class BrowserReplyResult:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class BrowserWechatResult:
+    """Result of requesting a WeChat exchange through the visible Boss Web control."""
+
+    ok: bool
+    friend_id: int
+    requested: bool
+    verified: bool
+    engine: str
+    method: str
+    target: dict[str, Any]
+    verification: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
 def resolve_browser_reply_target(client: BossClient, friend_id: int) -> BrowserReplyTarget:
     """Resolve a recruiter inbox friend id into browser-send target data."""
     data = client.get_boss_friend_details([friend_id])
@@ -167,6 +184,45 @@ def send_boss_message_via_browser(
     raise BrowserReplyError("浏览器发送失败: " + " | ".join(errors))
 
 
+def request_wechat_via_browser(
+    credential: Credential,
+    target: BrowserReplyTarget,
+    *,
+    engine: BrowserEngine = "auto",
+    headless: bool = False,
+    timeout_ms: int = 45_000,
+) -> BrowserWechatResult:
+    """Open the candidate chat and execute Boss Web's visible WeChat exchange control."""
+    engines = ["camoufox", "chrome"] if engine == "auto" else [engine]
+    errors: list[str] = []
+    for selected_engine in engines:
+        try:
+            method, verification = _request_wechat_once_with_engine(
+                credential,
+                target,
+                engine=selected_engine,
+                headless=headless,
+                timeout_ms=timeout_ms,
+            )
+            verified = verification.get("matched") is True
+            return BrowserWechatResult(
+                ok=verified,
+                friend_id=target.friend_id,
+                requested=True,
+                verified=verified,
+                engine=selected_engine,
+                method=method,
+                target=target.safe_dict(),
+                verification=verification,
+            )
+        except BrowserReplyError as exc:
+            errors.append(f"{selected_engine}: {exc}")
+            if engine != "auto":
+                raise
+
+    raise BrowserReplyError("浏览器微信交换失败: " + " | ".join(errors), code="browser_wechat_failed")
+
+
 def verify_latest_message(
     credential: Credential,
     friend_id: int,
@@ -214,6 +270,65 @@ def _send_once_with_engine(
         return _send_with_camoufox(credential, target, message, headless=headless, timeout_ms=timeout_ms)
     if engine == "chrome":
         return _send_with_playwright_chrome(credential, target, message, headless=headless, timeout_ms=timeout_ms)
+    raise BrowserReplyError(f"不支持的浏览器引擎: {engine}", code="unsupported_browser_engine")
+
+
+def _request_wechat_once_with_engine(
+    credential: Credential,
+    target: BrowserReplyTarget,
+    *,
+    engine: str,
+    headless: bool,
+    timeout_ms: int,
+) -> tuple[str, dict[str, Any]]:
+    if engine == "camoufox":
+        try:
+            from camoufox.sync_api import Camoufox
+        except ImportError as exc:
+            raise BrowserReplyError(
+                "camoufox 未安装。安装: pip install 'kabi-boss-cli[browser]'",
+                code="browser_backend_missing",
+            ) from exc
+        try:
+            with Camoufox(headless=headless) as browser:
+                context = browser.new_context(locale="zh-CN")
+                _add_cookies_to_context(context, credential)
+                return _request_wechat_from_page(context.new_page(), target, timeout_ms=timeout_ms)
+        except BrowserReplyError:
+            raise
+        except Exception as exc:
+            raise BrowserReplyError(f"Camoufox 启动或微信交换失败: {exc}", code="browser_engine_failed") from exc
+
+    if engine == "chrome":
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError as exc:
+            raise BrowserReplyError(
+                "playwright 未安装。建议使用 camoufox: pip install 'kabi-boss-cli[browser]'",
+                code="browser_backend_missing",
+            ) from exc
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch(
+                    channel="chrome",
+                    headless=headless,
+                    args=["--disable-blink-features=AutomationControlled"],
+                )
+            except Exception as exc:
+                raise BrowserReplyError(f"无法启动 Chrome: {exc}", code="browser_engine_failed") from exc
+            try:
+                context = browser.new_context(locale="zh-CN")
+                context.add_init_script(
+                    """
+                    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                    window.chrome = window.chrome || { runtime: {} };
+                    """
+                )
+                _add_cookies_to_context(context, credential)
+                return _request_wechat_from_page(context.new_page(), target, timeout_ms=timeout_ms)
+            finally:
+                browser.close()
+
     raise BrowserReplyError(f"不支持的浏览器引擎: {engine}", code="unsupported_browser_engine")
 
 
@@ -305,6 +420,15 @@ def _add_cookies_to_context(context: Any, credential: Credential) -> None:
 
 
 def _send_from_page(page: Any, target: BrowserReplyTarget, message: str, *, timeout_ms: int) -> str:
+    _prepare_chat_page(page, timeout_ms=timeout_ms)
+
+    if _has_browser_send_bridge(page):
+        return _send_via_browser_bridge(page, target, message, timeout_ms=timeout_ms)
+
+    return _send_via_dom(page, target, message, timeout_ms=timeout_ms)
+
+
+def _prepare_chat_page(page: Any, *, timeout_ms: int) -> None:
     response = page.goto(WEB_BOSS_CHAT_URL, wait_until="domcontentloaded", timeout=timeout_ms)
     status = getattr(response, "status", None)
     if status and status >= 400:
@@ -334,10 +458,21 @@ def _send_from_page(page: Any, target: BrowserReplyTarget, message: str, *, time
 
     _close_known_dialogs(page)
 
-    if _has_browser_send_bridge(page):
-        return _send_via_browser_bridge(page, target, message, timeout_ms=timeout_ms)
 
-    return _send_via_dom(page, target, message, timeout_ms=timeout_ms)
+def _select_target_conversation(page: Any, target: BrowserReplyTarget, *, timeout_ms: int) -> Any:
+    row_selector = f'[id="_{target.friend_id}-{target.friend_source}"]'
+    row = page.locator(row_selector).first
+    try:
+        row.wait_for(state="visible", timeout=timeout_ms)
+    except Exception as exc:
+        raise BrowserReplyError(
+            f"未在 Boss 聊天列表中找到候选人行: friendId={target.friend_id}",
+            code="browser_target_not_visible",
+        ) from exc
+    row.click(timeout=10_000)
+    page.wait_for_timeout(2_000)
+    _close_known_dialogs(page)
+    return page.locator(".chat-conversation").first
 
 
 def _has_browser_send_bridge(page: Any) -> bool:
@@ -405,23 +540,11 @@ def _send_via_browser_bridge(page: Any, target: BrowserReplyTarget, message: str
 
 def _send_via_dom(page: Any, target: BrowserReplyTarget, message: str, *, timeout_ms: int) -> str:
     """Send through visible Boss Web controls when globals are not exposed."""
-    row_selector = f'[id="_{target.friend_id}-{target.friend_source}"]'
-    row = page.locator(row_selector).first
-    try:
-        row.wait_for(state="visible", timeout=timeout_ms)
-    except Exception as exc:
-        raise BrowserReplyError(
-            f"未在 Boss 聊天列表中找到候选人行: friendId={target.friend_id}",
-            code="browser_target_not_visible",
-        ) from exc
+    conversation = _select_target_conversation(page, target, timeout_ms=timeout_ms)
 
-    row.click(timeout=10_000)
-    page.wait_for_timeout(2_000)
-    _close_known_dialogs(page)
-
-    if target.name:
+    if target.name and "*" not in target.name:
         try:
-            page.locator(".chat-conversation").get_by_text(target.name, exact=True).first.wait_for(
+            conversation.get_by_text(target.name, exact=True).first.wait_for(
                 state="visible",
                 timeout=10_000,
             )
@@ -458,6 +581,64 @@ def _send_via_dom(page: Any, target: BrowserReplyTarget, message: str, *, timeou
 
     page.wait_for_timeout(2_000)
     return "dom.chat-composer"
+
+
+def _request_wechat_from_page(
+    page: Any,
+    target: BrowserReplyTarget,
+    *,
+    timeout_ms: int,
+) -> tuple[str, dict[str, Any]]:
+    """Click the visible WeChat exchange control and require a changed success state."""
+    _prepare_chat_page(page, timeout_ms=timeout_ms)
+    conversation = _select_target_conversation(page, target, timeout_ms=timeout_ms)
+    try:
+        before = conversation.inner_text(timeout=5_000)
+    except Exception:
+        before = ""
+
+    control = None
+    for label in ("换微信", "交换微信"):
+        locator = conversation.get_by_text(label, exact=True).last
+        try:
+            if locator.count() and locator.is_visible(timeout=1_000):
+                control = locator
+                break
+        except Exception:
+            continue
+    if control is None:
+        raise BrowserReplyError("当前会话没有可用的换微信控件", code="browser_wechat_control_missing")
+
+    try:
+        control.click(timeout=10_000)
+    except Exception as exc:
+        raise BrowserReplyError("换微信控件无法点击", code="browser_wechat_click_failed") from exc
+
+    for label in ("确认交换", "确认", "确定"):
+        try:
+            confirm = page.get_by_text(label, exact=True).last
+            if confirm.count() and confirm.is_visible(timeout=1_000):
+                confirm.click(timeout=5_000)
+                break
+        except Exception:
+            continue
+
+    page.wait_for_timeout(2_000)
+    try:
+        after = conversation.inner_text(timeout=5_000)
+    except Exception:
+        after = ""
+    success_tokens = (
+        "等待对方同意",
+        "已向对方发起微信交换",
+        "微信交换请求已发送",
+        "已发送交换微信",
+        "已申请交换微信",
+    )
+    matched_token = next((token for token in success_tokens if token in after and (token not in before or after != before)), "")
+    if not matched_token:
+        raise BrowserReplyError("换微信控件已点击，但未看到成功状态", code="browser_wechat_not_verified")
+    return "dom.exchange-wechat", {"status": "matched", "matched": True, "indicator": matched_token}
 
 
 def _close_known_dialogs(page: Any) -> None:

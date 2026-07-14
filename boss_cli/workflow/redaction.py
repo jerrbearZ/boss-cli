@@ -99,8 +99,8 @@ def outbound_idempotency_key(
     *,
     candidate_id: int,
     action_type: str,
-    template_id: int,
-    template_version: str,
+    template_id: int | None = None,
+    template_version: str = "",
     trigger_message_fingerprint: str,
 ) -> str:
     """Create the production idempotency key for an outbound action."""
@@ -109,7 +109,7 @@ def outbound_idempotency_key(
             [
                 str(candidate_id),
                 action_type,
-                str(template_id),
+                str(template_id or ""),
                 template_version,
                 trigger_message_fingerprint,
             ]
