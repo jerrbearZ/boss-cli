@@ -129,7 +129,7 @@ boss recruiter recommend -p 2                               # Next page
 boss recruiter greet <encryptGeekId>                        # Initiate chat with candidate
 boss recruiter batch-view "Python" --city 杭州 -n 10       # Batch view top 10 (triggers "viewed" notice)
 boss recruiter inbox                                        # View candidate messages
-boss recruiter inbox --job <encryptJobId> -p 2              # Filter by job, page 2
+boss recruiter inbox --job <encryptJobId>                   # Filter by job
 boss recruiter reply <friendId> "感谢您的关注..."            # Reply to candidate
 boss recruiter chat <friendId>                              # View chat history
 
@@ -178,12 +178,24 @@ boss recruiter resume-download <encryptGeekId> --job <encryptJobId>
 boss recruiter greet <encryptGeekId>
 
 # 7. Check inbox and reply
-boss recruiter inbox -p 1
+boss recruiter inbox
 boss recruiter reply <friendId> "感谢您的关注，方便电话聊聊吗？"
 
 # 8. Export all candidates
 boss recruiter export --format json -o candidates.json
 ```
+
+### Local Workflow Reader
+
+Persist recruiter jobs, inbox conversations, latest messages, and bounded chat history in the local SQLite workflow database:
+
+```bash
+boss workflow init-db
+boss workflow sync --limit 100 --history changed --history-budget 20 --json
+boss dashboard
+```
+
+`workflow sync` is read-only. It does not enqueue or send messages, and full resume reads are excluded from synchronization because they may trigger a candidate-visible notification. The default database is `~/.local/share/boss-cli/workflow.db`; set `BOSS_WORKFLOW_DB` or pass `--db` to override it.
 
 ## Structured Output
 
@@ -377,7 +389,7 @@ boss recruiter recommend -p 2                  # 翻页
 # 沟通
 boss recruiter greet <encryptGeekId>           # 向候选人打招呼
 boss recruiter batch-view "Python" -n 10       # 批量查看 (触发被查看通知)
-boss recruiter inbox -p 1                      # 查看候选人消息
+boss recruiter inbox                           # 查看候选人消息
 boss recruiter reply <friendId> "您好..."       # 回复候选人
 
 # 沟通页操作

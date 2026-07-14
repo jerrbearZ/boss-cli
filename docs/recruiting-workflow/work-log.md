@@ -1,5 +1,35 @@
 # Work Log
 
+## 2026-07-14: Incremental Reading Layer
+
+### Process
+
+- Replaced the one-page dashboard poller with an account-scoped incremental reader.
+- Added ordered schema version 3 migration support for existing workflow databases.
+- Integrated stable recruiter identity, timestamp, direction, job, message-history, and profile-summary normalization.
+- Exposed the same synchronization service through `boss workflow sync` and the dashboard.
+
+### Results
+
+- Inbox pagination is bounded by candidate/page limits and repeated-page detection.
+- Candidate details and latest messages are read in batches of at most 50.
+- Chat history is fetched only for changed or incomplete conversations and is controlled by a per-run budget.
+- Page checkpoints support restart after interruption.
+- Candidate workflow stage and do-not-contact state survive synchronization.
+- Complete unfiltered scans can mark missing candidates inactive; partial scans cannot.
+- Dashboard candidate reads are scoped to the latest synchronized account.
+
+### Verification
+
+- Added migration, account identity, pagination, idempotency, history budget, resume, privacy, profile, inactivity, and CLI integration tests.
+- Full non-smoke suite and package build are required before release.
+- No live Boss read was run during implementation because a valid authenticated session was not available as a deterministic test fixture.
+
+### Design Notes
+
+- Full resume reads remain outside the synchronization path because they may trigger candidate-visible side effects.
+- The next workflow component should consume normalized SQLite state rather than re-reading Boss independently.
+
 ## 2026-07-08: Initial Boss-Side Context Layer
 
 ### Process

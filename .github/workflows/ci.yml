@@ -31,4 +31,7 @@ jobs:
         run: uv run ruff check .
 
       - name: Test
-        run: uv run pytest tests/test_cli.py -v
+        run: uv run python -m pytest -p no:capture -q -m 'not smoke'
+
+      - name: Build package
+        run: uv build
