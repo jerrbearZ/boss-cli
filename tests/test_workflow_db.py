@@ -21,7 +21,7 @@ def test_init_db_creates_expected_tables(tmp_path):
     finally:
         store.close()
 
-    assert schema_version == 4
+    assert schema_version == 5
     assert {
         "accounts",
         "jobs",
@@ -41,6 +41,8 @@ def test_init_db_creates_expected_tables(tmp_path):
         "workflow_settings",
         "sync_checkpoints",
         "sync_run_errors",
+        "automation_decisions",
+        "automation_daemon_state",
     }.issubset(tables)
 
 
@@ -230,7 +232,7 @@ def test_v2_database_migrates_in_place(tmp_path):
     try:
         account = store.list_accounts()[0]
 
-        assert store.current_schema_version() == 4
+        assert store.current_schema_version() == 5
         assert account["account_hash"] == "existing"
         assert account["identity_source"] == "credential"
         assert "sync_checkpoints" in store.table_names()
@@ -278,9 +280,11 @@ def test_v3_actions_migrate_to_typed_nullable_actions(tmp_path):
         action = store.get_action(1)
         columns = {row["name"]: row for row in store.conn.execute("PRAGMA table_info(outbound_actions)")}
 
-        assert store.current_schema_version() == 4
+        assert store.current_schema_version() == 5
         assert action is not None
         assert action["action_type"] == "send_message"
+        assert action["status"] == "needs_review"
+        assert action["last_error_code"] == "schema_v5_migration_review"
         assert "depends_on_action_id" in columns
         assert columns["template_id"]["notnull"] == 0
         assert store.conn.execute("PRAGMA foreign_key_check").fetchall() == []
@@ -471,6 +475,6 @@ def test_workflow_init_db_command_outputs_json(tmp_path):
     payload = json.loads(result.output)
     assert payload["ok"] is True
     assert payload["data"]["db"] == str(db_path)
-    assert payload["data"]["schema_version"] == 4
+    assert payload["data"]["schema_version"] == 5
     assert "outbound_actions" in payload["data"]["tables"]
     assert db_path.exists()

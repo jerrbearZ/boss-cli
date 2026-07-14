@@ -14,7 +14,7 @@ from typing import Any, Iterator
 from .models import ALL_ACTION_STATUSES, QueueSummary
 from .redaction import redact_text, sha256_text, stable_json_dumps
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 MIGRATIONS_PATH = Path(__file__).with_name("migrations")
 
@@ -639,15 +639,16 @@ class WorkflowStore:
         active: bool = False,
         approved_by: str | None = None,
         approved_at: str | None = None,
+        selection_guidance: str = "",
     ) -> int:
         now = utc_now()
         self.conn.execute(
             """
             INSERT INTO message_templates (
               name, version, body, body_hash, approved, active, approved_by,
-              approved_at, created_at, updated_at
+              approved_at, selection_guidance, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(name, version) DO UPDATE SET
               body=excluded.body,
               body_hash=excluded.body_hash,
@@ -655,9 +656,22 @@ class WorkflowStore:
               active=excluded.active,
               approved_by=excluded.approved_by,
               approved_at=excluded.approved_at,
+              selection_guidance=excluded.selection_guidance,
               updated_at=excluded.updated_at
             """,
-            (name, version, body, sha256_text(body), int(approved), int(active), approved_by, approved_at, now, now),
+            (
+                name,
+                version,
+                body,
+                sha256_text(body),
+                int(approved),
+                int(active),
+                approved_by,
+                approved_at,
+                redact_text(selection_guidance, max_length=500),
+                now,
+                now,
+            ),
         )
         self._commit()
         row = self.conn.execute("SELECT id FROM message_templates WHERE name=? AND version=?", (name, version)).fetchone()
@@ -1095,9 +1109,380 @@ class WorkflowStore:
         ).fetchall()
         return [_row_to_dict(row) or {} for row in rows]
 
+    def list_active_templates(self) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT *
+            FROM message_templates
+            WHERE approved=1 AND active=1 AND retired_at IS NULL
+            ORDER BY name, version, id
+            """
+        ).fetchall()
+        return [_row_to_dict(row) or {} for row in rows]
+
     def get_template(self, template_id: int) -> dict[str, Any] | None:
         row = self.conn.execute("SELECT * FROM message_templates WHERE id=?", (template_id,)).fetchone()
         return _row_to_dict(row)
+
+    def get_template_version(self, *, name: str, version: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM message_templates WHERE name=? AND version=?",
+            (name, version),
+        ).fetchone()
+        return _row_to_dict(row)
+
+    def set_template_approval(self, template_id: int, *, approved: bool, approved_by: str) -> None:
+        now = utc_now()
+        with self.transaction():
+            if approved:
+                self.conn.execute(
+                    """
+                    UPDATE message_templates
+                    SET active=0, retired_at=COALESCE(retired_at, ?), updated_at=?
+                    WHERE name=(SELECT name FROM message_templates WHERE id=?)
+                      AND id<>? AND active=1
+                    """,
+                    (now, now, template_id, template_id),
+                )
+            self.conn.execute(
+                """
+                UPDATE message_templates
+                SET approved=?, active=?, approved_by=?, approved_at=?,
+                    retired_at=CASE WHEN ? THEN NULL ELSE retired_at END,
+                    updated_at=?
+                WHERE id=?
+                """,
+                (int(approved), int(approved), approved_by, now if approved else None, int(approved), now, template_id),
+            )
+
+    def retire_template(self, template_id: int) -> None:
+        now = utc_now()
+        self.conn.execute(
+            """
+            UPDATE message_templates
+            SET active=0, retired_at=?, updated_at=?
+            WHERE id=?
+            """,
+            (now, now, template_id),
+        )
+        self._commit()
+
+    def list_automation_candidates(
+        self,
+        *,
+        account_id: int,
+        catalog_hash: str,
+        prompt_version: str,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT
+              c.*,
+              m.id AS trigger_message_id,
+              m.fingerprint AS trigger_fingerprint,
+              m.text_redacted AS trigger_text,
+              m.sent_at AS trigger_sent_at
+            FROM candidates c
+            JOIN messages m ON m.id = (
+              SELECT latest.id
+              FROM messages latest
+              WHERE latest.candidate_id=c.id
+              ORDER BY COALESCE(latest.sent_at, latest.created_at) DESC, latest.id DESC
+              LIMIT 1
+            )
+            WHERE c.account_id=?
+              AND c.do_not_contact=0
+              AND c.inactive_at IS NULL
+              AND m.direction='inbound'
+              AND m.content_kind='text'
+              AND COALESCE(m.text_redacted, '') <> ''
+              AND NOT EXISTS (
+                SELECT 1
+                FROM automation_decisions d
+                WHERE d.candidate_id=c.id
+                  AND d.trigger_fingerprint=m.fingerprint
+                  AND d.catalog_hash=?
+                  AND d.prompt_version=?
+              )
+            ORDER BY COALESCE(m.sent_at, m.created_at) ASC, c.id ASC
+            LIMIT ?
+            """,
+            (account_id, catalog_hash, prompt_version, limit),
+        ).fetchall()
+        return [_row_to_dict(row) or {} for row in rows]
+
+    def get_automation_context(self, candidate_id: int, *, message_limit: int = 8) -> dict[str, Any] | None:
+        candidate = self.get_candidate(candidate_id)
+        if candidate is None:
+            return None
+        rows = self.conn.execute(
+            """
+            SELECT direction, content_kind, sent_at, text_redacted, fingerprint
+            FROM messages
+            WHERE candidate_id=?
+            ORDER BY COALESCE(sent_at, created_at) DESC, id DESC
+            LIMIT ?
+            """,
+            (candidate_id, message_limit),
+        ).fetchall()
+        candidate["messages"] = [dict(row) for row in reversed(rows)]
+        return candidate
+
+    def record_automation_decision(
+        self,
+        *,
+        account_id: int,
+        candidate_id: int,
+        trigger_fingerprint: str,
+        catalog_hash: str,
+        decision_key: str,
+        outcome: str,
+        confidence: float,
+        reason: str,
+        provider: str,
+        model: str,
+        prompt_version: str,
+        template_id: int | None = None,
+        response_hash: str | None = None,
+        run_id: str | None = None,
+    ) -> int:
+        now = utc_now()
+        self.conn.execute(
+            """
+            INSERT INTO automation_decisions(
+              run_id, account_id, candidate_id, trigger_fingerprint, catalog_hash,
+              decision_key, template_id, outcome, confidence, reason_redacted,
+              provider, model, prompt_version, response_hash, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(candidate_id, decision_key) DO UPDATE SET
+              run_id=excluded.run_id,
+              template_id=excluded.template_id,
+              outcome=excluded.outcome,
+              confidence=excluded.confidence,
+              reason_redacted=excluded.reason_redacted,
+              provider=excluded.provider,
+              model=excluded.model,
+              response_hash=excluded.response_hash
+            """,
+            (
+                run_id,
+                account_id,
+                candidate_id,
+                trigger_fingerprint,
+                catalog_hash,
+                decision_key,
+                template_id,
+                outcome,
+                max(0.0, min(float(confidence), 1.0)),
+                redact_text(reason, max_length=500),
+                provider,
+                model,
+                prompt_version,
+                response_hash,
+                now,
+            ),
+        )
+        self._commit()
+        row = self.conn.execute(
+            "SELECT id FROM automation_decisions WHERE candidate_id=? AND decision_key=?",
+            (candidate_id, decision_key),
+        ).fetchone()
+        return int(row["id"])
+
+    def list_automation_decisions(self, *, account_id: int | None, limit: int = 200) -> list[dict[str, Any]]:
+        where = "WHERE d.account_id=?" if account_id is not None else ""
+        params: tuple[Any, ...] = (account_id, limit) if account_id is not None else (limit,)
+        rows = self.conn.execute(
+            f"""
+            SELECT
+              d.*,
+              c.name_redacted,
+              c.job_name,
+              c.last_message_preview,
+              t.name AS template_name,
+              t.version AS template_version
+            FROM automation_decisions d
+            JOIN candidates c ON c.id=d.candidate_id
+            LEFT JOIN message_templates t ON t.id=d.template_id
+            {where}
+            ORDER BY d.created_at DESC, d.id DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+        return [_row_to_dict(row) or {} for row in rows]
+
+    def automation_summary(self, *, account_id: int | None) -> dict[str, int]:
+        summary = {"selected": 0, "review": 0, "skipped": 0, "error": 0, "dry_run": 0, "total": 0}
+        if account_id is None:
+            rows = self.conn.execute(
+                "SELECT outcome, COUNT(*) AS count FROM automation_decisions GROUP BY outcome"
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT outcome, COUNT(*) AS count FROM automation_decisions WHERE account_id=? GROUP BY outcome",
+                (account_id,),
+            ).fetchall()
+        for row in rows:
+            outcome = str(row["outcome"])
+            count = int(row["count"])
+            if outcome in summary:
+                summary[outcome] = count
+            summary["total"] += count
+        return summary
+
+    def delivery_summary(self, *, account_id: int | None) -> dict[str, int]:
+        summary = {"messages_verified": 0, "wechat_verified": 0, "failed": 0}
+        where = "WHERE c.account_id=?" if account_id is not None else ""
+        params: tuple[Any, ...] = (account_id,) if account_id is not None else ()
+        rows = self.conn.execute(
+            f"""
+            SELECT a.action_type, a.status, COUNT(*) AS count
+            FROM outbound_actions a
+            JOIN candidates c ON c.id=a.candidate_id
+            {where}
+            GROUP BY a.action_type, a.status
+            """,
+            params,
+        ).fetchall()
+        for row in rows:
+            action_type = str(row["action_type"])
+            status = str(row["status"])
+            count = int(row["count"])
+            if status == "verified" and action_type in {"send_message", "send_template"}:
+                summary["messages_verified"] += count
+            elif status == "verified" and action_type == "exchange_wechat":
+                summary["wechat_verified"] += count
+            elif status in {"failed_retryable", "failed_terminal", "sent_unverified"}:
+                summary["failed"] += count
+        return summary
+
+    def claim_daemon(
+        self,
+        *,
+        daemon_name: str,
+        owner_id: str,
+        live_mode: bool,
+        lease_seconds: int,
+        now: str | None = None,
+    ) -> bool:
+        claim_time = now or utc_now()
+        lease_expires = _add_seconds(claim_time, lease_seconds)
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = self.conn.execute(
+                "SELECT * FROM automation_daemon_state WHERE daemon_name=?",
+                (daemon_name,),
+            ).fetchone()
+            if (
+                row is not None
+                and row["owner_id"] not in (None, owner_id)
+                and row["status"] == "running"
+                and str(row["lease_expires_at"] or "") > claim_time
+            ):
+                self.conn.commit()
+                return False
+            self.conn.execute(
+                """
+                INSERT INTO automation_daemon_state(
+                  daemon_name, owner_id, status, live_mode, started_at,
+                  heartbeat_at, lease_expires_at, updated_at
+                ) VALUES (?, ?, 'running', ?, ?, ?, ?, ?)
+                ON CONFLICT(daemon_name) DO UPDATE SET
+                  owner_id=excluded.owner_id,
+                  status='running',
+                  live_mode=excluded.live_mode,
+                  started_at=excluded.started_at,
+                  heartbeat_at=excluded.heartbeat_at,
+                  lease_expires_at=excluded.lease_expires_at,
+                  last_error_code=NULL,
+                  last_error_redacted=NULL,
+                  updated_at=excluded.updated_at
+                """,
+                (daemon_name, owner_id, int(live_mode), claim_time, claim_time, lease_expires, claim_time),
+            )
+            self.conn.commit()
+            return True
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def heartbeat_daemon(
+        self,
+        *,
+        daemon_name: str,
+        owner_id: str,
+        lease_seconds: int,
+        account_id: int | None = None,
+        last_run_id: str | None = None,
+        cycle_status: str | None = None,
+        cycle_summary: dict[str, Any] | None = None,
+        cycle_started_at: str | None = None,
+        cycle_finished_at: str | None = None,
+        next_poll_at: str | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        now = utc_now()
+        cursor = self.conn.execute(
+            """
+            UPDATE automation_daemon_state
+            SET account_id=COALESCE(?, account_id), heartbeat_at=?, lease_expires_at=?,
+                last_run_id=COALESCE(?, last_run_id),
+                last_cycle_status=COALESCE(?, last_cycle_status),
+                cycle_summary_json=COALESCE(?, cycle_summary_json),
+                last_cycle_started_at=COALESCE(?, last_cycle_started_at),
+                last_cycle_finished_at=COALESCE(?, last_cycle_finished_at),
+                next_poll_at=?, last_error_code=?, last_error_redacted=?, updated_at=?
+            WHERE daemon_name=? AND owner_id=?
+            """,
+            (
+                account_id,
+                now,
+                _add_seconds(now, lease_seconds),
+                last_run_id,
+                cycle_status,
+                stable_json_dumps(cycle_summary) if cycle_summary is not None else None,
+                cycle_started_at,
+                cycle_finished_at,
+                next_poll_at,
+                error_code,
+                redact_text(error_message, max_length=500) if error_message else None,
+                now,
+                daemon_name,
+                owner_id,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError("automation daemon lease is no longer owned by this process")
+        self._commit()
+
+    def release_daemon(self, *, daemon_name: str, owner_id: str, status: str = "stopped") -> None:
+        now = utc_now()
+        self.conn.execute(
+            """
+            UPDATE automation_daemon_state
+            SET owner_id=NULL, status=?, heartbeat_at=?, lease_expires_at=NULL,
+                next_poll_at=NULL, updated_at=?
+            WHERE daemon_name=? AND owner_id=?
+            """,
+            (status, now, now, daemon_name, owner_id),
+        )
+        self._commit()
+
+    def get_daemon_state(self, daemon_name: str = "primary") -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM automation_daemon_state WHERE daemon_name=?",
+            (daemon_name,),
+        ).fetchone()
+        value = _row_to_dict(row)
+        if value and value.get("cycle_summary_json"):
+            try:
+                value["cycle_summary"] = json.loads(value["cycle_summary_json"])
+            except json.JSONDecodeError:
+                value["cycle_summary"] = {}
+        return value
 
     def set_setting(self, key: str, value: dict[str, Any] | str | bool | int | None) -> None:
         now = utc_now()
