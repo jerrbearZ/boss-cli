@@ -1,5 +1,7 @@
 # Production Dashboard Design
 
+> Historical operator-driven design. Schema v5 pivots the dashboard to monitoring, pause/resume, and template approval only. See [continuous-automation.md](./continuous-automation.md).
+
 Date: 2026-07-12
 
 ## Implementation Status

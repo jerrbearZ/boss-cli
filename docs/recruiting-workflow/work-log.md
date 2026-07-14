@@ -1,5 +1,42 @@
 # Work Log
 
+## 2026-07-14: Continuous Automation Pivot
+
+### Process
+
+- Created branch `continuous-recruiting-automation` from the stable batch/dashboard implementation.
+- Added schema version 5 for constrained automation decisions, template guidance/retirement, and a single-owner daemon lease with heartbeat state.
+- Added an OpenAI Responses selector that can choose only from active approved template IDs and sends only redacted conversation context.
+- Added one-cycle orchestration and a continuous daemon around sync, decision, durable planning, verified message sending, and dependent WeChat requests.
+- Added dry-by-default `boss workflow daemon`, explicit `--live`, `--once`, signal handling, backoff, and `daemon-status`.
+- Removed dashboard sync, selection, enqueue, and sender endpoints; rebuilt it around runtime monitoring, decisions, deliveries, audit state, pause/resume, and immutable template approval.
+
+### Results
+
+- New inbound text is processed without an operator keeping the dashboard open.
+- The LLM never generates outbound text; invalid, uncertain, or low-confidence output cannot enqueue an action.
+- Dry decisions cannot suppress a later live decision, unchanged trigger/catalog combinations are not repeatedly evaluated, and catalog changes permit reconsideration.
+- Message actions are durably queued before decisions are finalized; WeChat remains dependent on verified message delivery.
+- Transient model failures back off and retry, while malformed model output becomes review.
+- Approving an edited template retires the previous active version with the same name.
+- Schema v4 pending queue rows are quarantined as `needs_review`; eight existing local pending actions were quarantined when this already-migrated development database was audited.
+
+### Verification
+
+- `uv run ruff check boss_cli tests/test_workflow_automation.py tests/test_workflow_dashboard.py tests/test_workflow_db.py` passed.
+- The repository's existing Python 3.12 pytest runtime crashes in pytest's capture initialization with exit 139 before collection.
+- A clean Python 3.13 runner completed the final full suite with `183 passed, 7 skipped`; the focused automation/database/dashboard suite completed with `38 passed`.
+- `uv build` produced the `0.5.0` wheel and source distribution.
+- Schema version 5 initialized with no foreign-key violations.
+- No live BOSS message or WeChat request was sent during this implementation pass.
+
+### Design Notes
+
+- Polling was selected because this repository has no BOSS webhook/event source.
+- The dashboard is intentionally outside the execution plane.
+- OpenAI requests set `store: false`; only validated decisions and response hashes are persisted.
+- The daemon is a foreground long-running process; launchd/systemd/container supervision remains a deployment concern.
+
 ## 2026-07-14: Incremental Reading Layer
 
 ### Process

@@ -1,5 +1,7 @@
 # Batch Automation And Dashboard
 
+> Historical schema v4 design. The operator-driven execution model was superseded by [continuous-automation.md](./continuous-automation.md) on 2026-07-14. The typed queue and verified browser actions remain in use, but the dashboard no longer syncs, selects candidates, enqueues, or runs the sender.
+
 Date: 2026-07-14
 
 ## Purpose

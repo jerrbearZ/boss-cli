@@ -192,11 +192,15 @@ Persist recruiter jobs, inbox conversations, latest messages, and bounded chat h
 ```bash
 boss workflow init-db
 boss workflow sync --limit 100 --history changed --history-budget 20 --json
-boss dashboard --port 8765                                    # Review, queue messages/WeChat requests, and run bounded batches
-boss dashboard
+export OPENAI_API_KEY='<key>'
+export BOSS_LLM_MODEL='<responses-api-model>'
+boss workflow daemon --once --json                            # Sync and record constrained decisions; no sends
+boss workflow daemon --live --action-delay 60                 # Continuous verified reply + WeChat execution
+boss workflow daemon-status --json
+boss dashboard --port 8765                                    # Monitor and approve immutable reply templates
 ```
 
-`workflow sync` is read-only. It does not enqueue or send messages, and full resume reads are excluded from synchronization because they may trigger a candidate-visible notification. The default database is `~/.local/share/boss-cli/workflow.db`; set `BOSS_WORKFLOW_DB` or pass `--db` to override it.
+`workflow daemon` is dry by default. In live mode, an LLM may only select from exact operator-approved templates; it cannot generate outbound text. The dashboard is supervisory and has no manual send endpoint. Full resume reads remain excluded because they may trigger a candidate-visible notification. The default database is `~/.local/share/boss-cli/workflow.db`; set `BOSS_WORKFLOW_DB` or pass `--db` to override it. See [continuous automation](./docs/recruiting-workflow/continuous-automation.md) for rollout and recovery.
 
 ## Structured Output
 

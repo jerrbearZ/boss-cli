@@ -1,6 +1,6 @@
 # Recruiting Workflow Context Layer
 
-Date: 2026-07-08
+Date: 2026-07-14
 
 This folder documents the recruiting automation context for this repository. It is intended to be the durable project memory for future work: what the repository can do today, what the target workflow is, what remains to be built, and how process, results, and design decisions should be recorded.
 
@@ -12,7 +12,7 @@ This repository only covers the Boss Zhipin side. It provides a Python CLI and A
 
 ## Current Repository Role
 
-`boss-cli` should be treated as a Boss Zhipin adapter layer, not as the complete workflow engine.
+`boss-cli` now contains both the Boss Zhipin adapter and a local continuous workflow engine.
 
 It can:
 
@@ -20,13 +20,13 @@ It can:
 - Read recruiter jobs, candidate inbox entries, candidate details, resumes, and chat history.
 - Send recruiter-side replies to candidates.
 - Store workflow state in SQLite for candidates, messages, templates, queue actions, events, and dashboard controls.
-- Run a local dashboard for inbox sync, mass selection, template approval, queued sending, and monitoring.
+- Run a leased continuous daemon that polls, selects approved replies, queues verified actions, and requests WeChat.
+- Run a local supervisory dashboard for monitoring, pause/resume, and immutable template approval.
 - Export structured JSON/YAML output that another automation service can consume.
 - Apply conservative request pacing and retry behavior around reverse-engineered Boss web APIs.
 
-It does not yet:
+It does not:
 
-- Run as a persistent daemon.
 - Listen to incoming messages through webhook or event subscription.
 - Provide complete production JD/rules classification commands.
 - Manage WeChat friend requests, remarks, tags, files, or cards.
@@ -42,6 +42,7 @@ It does not yet:
 - [dashboard-design.md](./dashboard-design.md): Operator dashboard design for controlled sending and audit monitoring.
 - [reader-architecture.md](./reader-architecture.md): Current incremental reader behavior, privacy boundaries, and recovery model.
 - [automation-dashboard.md](./automation-dashboard.md): Typed batch messages, WeChat exchange execution, dashboard flow, and recovery behavior.
+- [continuous-automation.md](./continuous-automation.md): Authoritative schema v5 daemon design, safety decisions, operations, and recovery.
 - [documentation-practice.md](./documentation-practice.md): Required documentation standard for future work.
 - [work-log.md](./work-log.md): Chronological record of process, results, verification, and open gaps.
 

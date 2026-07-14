@@ -1,5 +1,7 @@
 # Implementation Goal: Production Boss Follow-Up Engine
 
+> Historical implementation plan. Its manual execution assumptions were superseded by the schema v5 continuous daemon described in [continuous-automation.md](./continuous-automation.md).
+
 Date: 2026-07-11
 
 ## Goal Statement
@@ -42,6 +44,7 @@ boss workflow health --json
 - Dashboard MVP service/UI layer: implemented on 2026-07-12.
 - Incremental account-scoped reader, schema v3 migrations, checkpoints, conditional history, and `boss workflow sync`: implemented on 2026-07-14.
 - Typed message and WeChat batch planning, schema v4 dependencies, verified queue execution, and the integrated dashboard: implemented on 2026-07-14.
+- Continuous polling, constrained LLM selection, schema v5 decisions/lease state, daemon CLI, and supervisory dashboard: implemented on 2026-07-14.
 - Planner/enqueue and queue sender services remain dashboard-backed with incomplete CLI parity.
 - Next unimplemented package: persisted classification commands.
 

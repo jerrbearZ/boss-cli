@@ -1,5 +1,7 @@
 # Next Stage Plan
 
+> Historical staged plan. The selected direction is now the continuous schema v5 architecture in [continuous-automation.md](./continuous-automation.md).
+
 Date: 2026-07-08
 
 This plan focuses only on the Boss Zhipin portion of the requested recruiting workflow. WeChat and other social platform automation should be treated as separate adapter work after the Boss-side MVP is stable.
