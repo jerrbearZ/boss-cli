@@ -1214,6 +1214,13 @@ class WorkflowStore:
               AND COALESCE(m.text_redacted, '') <> ''
               AND NOT EXISTS (
                 SELECT 1
+                FROM outbound_actions completed
+                WHERE completed.candidate_id=c.id
+                  AND completed.action_type='exchange_wechat'
+                  AND completed.status='verified'
+              )
+              AND NOT EXISTS (
+                SELECT 1
                 FROM automation_decisions d
                 WHERE d.candidate_id=c.id
                   AND d.trigger_fingerprint=m.fingerprint

@@ -196,7 +196,7 @@ boss workflow install-templates --retire-existing --json
 
 `--retire-existing` explicitly retires active templates outside this catalog. Omit it when adding the
 catalog alongside other intentionally active templates. The catalog contains three contact-exchange replies
-and three automotive extended-warranty introductions. Each has separate selection guidance, and the model
+and four automotive extended-warranty replies. Each has separate selection guidance, and the model
 can only return one of their approved IDs.
 
 | Template | Approved message | Selection intent |
@@ -207,6 +207,7 @@ can only return one of their approved IDs.
 | `automotive_warranty_intro_direct` | `我们在做汽车延长保修服务，感兴趣的话，交换一个微信。` | Candidate asks what the business or opportunity does. |
 | `automotive_warranty_intro_conversational` | `我们主要做汽车延长保修服务，如果你感兴趣，可以交换微信进一步沟通。` | Candidate asks for context before continuing. |
 | `automotive_warranty_role_context` | `这个岗位与汽车延长保修服务相关，如果你想进一步了解，我们可以交换微信详聊。` | Candidate asks specifically what the role is related to. |
+| `automotive_warranty_interest_followup` | `您好，我们在做汽车延长保修服务，如果您感兴趣，可以交换微信进一步沟通。` | Candidate sends a generic greeting or expresses interest without a specific question. |
 
 ### 3. Validate one dry cycle
 

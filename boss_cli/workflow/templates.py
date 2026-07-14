@@ -7,7 +7,7 @@ from typing import Any
 
 from .db import WorkflowStore
 
-CATALOG_VERSION = "automotive-wechat-v1"
+CATALOG_VERSION = "automotive-wechat-v2"
 
 
 @dataclass(frozen=True)
@@ -67,6 +67,15 @@ AUTOMOTIVE_WECHAT_TEMPLATES = (
         selection_guidance=(
             "Use when the candidate specifically asks what the role or work is related to, and an invitation "
             "to discuss the automotive extended-warranty work on WeChat is appropriate."
+        ),
+    ),
+    CuratedTemplate(
+        name="automotive_warranty_interest_followup",
+        body="您好，我们在做汽车延长保修服务，如果您感兴趣，可以交换微信进一步沟通。",
+        selection_guidance=(
+            "Use for a generic greeting or a clear expression of interest when the candidate has not asked "
+            "a specific business or role question. Introduce the automotive extended-warranty service and "
+            "invite further discussion through a contact exchange."
         ),
     ),
 )

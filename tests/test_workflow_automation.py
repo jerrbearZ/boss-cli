@@ -9,7 +9,7 @@ import pytest
 from boss_cli.auth import Credential
 from boss_cli.browser_reply import BrowserReplyResult, BrowserWechatResult
 from boss_cli.workflow import init_db
-from boss_cli.workflow.automation import AutomationConfig, run_automation_cycle, run_daemon
+from boss_cli.workflow.automation import AutomationConfig, run_automation_cycle, run_daemon, template_catalog_hash
 from boss_cli.workflow.selector import AlibabaQwenSelector, TemplateSelection, TemplateSelectionError
 
 
@@ -370,6 +370,45 @@ def test_template_catalog_change_reconsiders_same_inbound_message(tmp_path):
         assert first["review"] == 1
         assert second["review"] == 1
         assert selector.calls == 2
+
+
+def test_verified_wechat_candidate_is_not_reconsidered_after_catalog_change(tmp_path):
+    with init_db(tmp_path / "workflow.db") as store:
+        account_id = store.upsert_account(account_hash="account")
+        candidate_id = store.upsert_candidate(account_id=account_id, friend_id=101)
+        store.upsert_message(
+            candidate_id=candidate_id,
+            fingerprint="inbound-1",
+            direction="inbound",
+            sent_at="2030-01-01T00:00:00Z",
+            text_redacted="I am interested",
+            content_kind="text",
+        )
+        template_id = approved_template(store)
+        message_action = store.enqueue_action(
+            candidate_id=candidate_id,
+            action_type="send_message",
+            template_id=template_id,
+            idempotency_key="message",
+        )
+        store.mark_action_verified(message_action)
+        wechat_action = store.enqueue_action(
+            candidate_id=candidate_id,
+            action_type="exchange_wechat",
+            depends_on_action_id=message_action,
+            idempotency_key="wechat",
+        )
+        store.mark_action_verified(wechat_action)
+        templates = store.list_active_templates()
+
+        candidates = store.list_automation_candidates(
+            account_id=account_id,
+            catalog_hash=template_catalog_hash(templates),
+            prompt_version="new-catalog",
+            limit=20,
+        )
+
+        assert candidates == []
 
 
 def test_approving_new_template_version_retires_previous_version(tmp_path):
