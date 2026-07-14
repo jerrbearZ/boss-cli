@@ -372,7 +372,8 @@ def test_template_catalog_change_reconsiders_same_inbound_message(tmp_path):
         assert selector.calls == 2
 
 
-def test_verified_wechat_candidate_is_not_reconsidered_after_catalog_change(tmp_path):
+@pytest.mark.parametrize("wechat_status", ["verified", "skipped_duplicate"])
+def test_completed_wechat_candidate_is_not_reconsidered_after_catalog_change(tmp_path, wechat_status):
     with init_db(tmp_path / "workflow.db") as store:
         account_id = store.upsert_account(account_hash="account")
         candidate_id = store.upsert_candidate(account_id=account_id, friend_id=101)
@@ -398,7 +399,7 @@ def test_verified_wechat_candidate_is_not_reconsidered_after_catalog_change(tmp_
             depends_on_action_id=message_action,
             idempotency_key="wechat",
         )
-        store.mark_action_verified(wechat_action)
+        store.mark_action_status(wechat_action, status=wechat_status)
         templates = store.list_active_templates()
 
         candidates = store.list_automation_candidates(

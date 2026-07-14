@@ -1,5 +1,39 @@
 # Work Log
 
+## 2026-07-15: Full Current-Inbox Live Run
+
+### Process
+
+- Reauthenticated the recruiter account and synchronized the complete current inbox before selecting replies.
+- Expanded the immutable catalog to seven templates so generic greetings and clear interest can receive an
+  approved automotive extended-warranty follow-up.
+- Ran Qwen in decision-only mode first: all 10 eligible latest inbound conversations selected an approved
+  template with no reviews, skips, or model errors.
+- Executed the live queue sequentially with browser verification and delayed writes.
+
+### Results
+
+- All 10 approved replies were sent and verified against BOSS latest-message state.
+- Nine new WeChat exchange requests were visibly verified.
+- One conversation already contained a completed WeChat handoff, so its unavailable exchange control was
+  reconciled as `skipped_duplicate` rather than replayed.
+- No executable `queued`, `locked`, `sending`, or `failed_retryable` actions remained after the run.
+
+### Hardening Discovered During The Run
+
+- Fixed the unscoped worker accidentally restricting itself to the first candidate after its first claim.
+- Added the current BOSS success text `请求交换微信已发送` to visible exchange verification.
+- Treat both `verified` and `skipped_duplicate` WeChat outcomes as completed when evaluating future catalog
+  changes, preventing already completed exchanges from being reconsidered.
+- Added regression coverage for multi-candidate queue execution, the current WeChat status text, and completed
+  exchange exclusion.
+
+### Verification
+
+- Clean Python 3.13 full suite: `196 passed, 7 skipped`.
+- Ruff and repository diff checks passed.
+- The Alibaba credential remained process-only and was not written to repository files or SQLite.
+
 ## 2026-07-15: Alibaba Qwen And Curated Template Validation
 
 ### Process

@@ -120,7 +120,7 @@ Two synthetic, non-candidate conversations verified the complete model boundary:
 
 - A direct request to continue on WeChat selected approved template ID 5, `wechat_candidate_requested`.
 - A question about the business and role selected approved template ID 8, `automotive_warranty_role_context`.
-- Both calls returned valid JSON, selected only IDs from the six active approved templates, and passed local
+- Both calls returned valid JSON, selected only IDs from the active approved templates, and passed local
   outcome, confidence, and catalog validation.
 
 The candidate-isolated live canary completed on 2026-07-15:
@@ -135,6 +135,17 @@ The candidate-isolated live canary completed on 2026-07-15:
   action and a later verification timestamp.
 - The final canary cycle completed with no stop reason, the daemon released its lease, and no executable
   canary actions remained queued.
+
+A full current-inbox run then completed on the same date:
+
+- A decision-only pass selected approved replies for all 10 eligible inbound conversations with no reviews,
+  skips, or model errors.
+- Live execution sent and verified all 10 exact approved replies.
+- Nine new WeChat requests were visibly verified; the remaining conversation already contained a completed
+  contact handoff and was recorded as `skipped_duplicate` without replaying the exchange.
+- The run exposed and fixed multi-candidate worker scoping and recognition of the current BOSS confirmation
+  text `请求交换微信已发送`.
+- No executable queue actions remained after reconciliation.
 
 ## Platform Deployment Status
 
@@ -246,10 +257,10 @@ boss workflow daemon-status --json
 
 The dashboard shows heartbeat freshness, mode, last cycle, next poll, decisions, total verified deliveries, queue state, errors, and audit events.
 
-## Next Acceptance Test: Reply And WeChat Exchange
+## Controlled Acceptance Procedure
 
-The next milestone is one controlled end-to-end canary proving that an approved reply is sent and verified,
-then the dependent visible `换微信` control is executed and verified for the same conversation.
+Use this procedure for future BOSS UI or browser-runtime changes. It proves that an approved reply is sent
+and verified before the dependent visible `换微信` control is executed for the same conversation.
 
 ### Preconditions
 
@@ -342,8 +353,8 @@ It remains a trusted localhost application without user authentication. Do not b
 - Browser UI selectors may change when BOSS Web changes.
 - The dashboard does not resolve review decisions or retry individual actions yet.
 - Process supervision, secrets management, and OS startup installation are deployment responsibilities.
-- One Qwen-driven browser reply and its dependent WeChat exchange have passed the controlled live canary.
+- One controlled canary and one 10-conversation Qwen-driven live batch have passed on macOS.
 
 ## Verification Baseline
 
-The implementation includes tests for schema migration, approved-ID constraints, malformed output, transient retry behavior, dry/live isolation, low-confidence review, decision idempotency, catalog reconsideration, pause behavior, candidate-scoped queue claims, contact-request eligibility, message-to-WeChat dependency order, the `换微信` consent sequence, retryable browser setup failures, immutable template replacement, lease exclusion, and removal of manual dashboard execution endpoints. The current clean Python 3.13 baseline is `192 passed, 7 skipped`.
+The implementation includes tests for schema migration, approved-ID constraints, malformed output, transient retry behavior, dry/live isolation, low-confidence review, decision idempotency, catalog reconsideration, pause behavior, candidate-scoped and multi-candidate queue claims, contact-request eligibility, completed-exchange exclusion, message-to-WeChat dependency order, the `换微信` consent sequence and current success text, retryable browser setup failures, immutable template replacement, lease exclusion, and removal of manual dashboard execution endpoints. The current clean Python 3.13 baseline is `196 passed, 7 skipped`.

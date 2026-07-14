@@ -1217,7 +1217,7 @@ class WorkflowStore:
                 FROM outbound_actions completed
                 WHERE completed.candidate_id=c.id
                   AND completed.action_type='exchange_wechat'
-                  AND completed.status='verified'
+                  AND completed.status IN ('verified', 'skipped_duplicate')
               )
               AND NOT EXISTS (
                 SELECT 1
