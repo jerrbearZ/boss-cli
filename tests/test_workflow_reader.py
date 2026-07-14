@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
+from unittest.mock import patch
 
 import pytest
+from click.testing import CliRunner
 
 from boss_cli.auth import Credential
+from boss_cli.cli import cli
 from boss_cli.workflow import init_db
 from boss_cli.workflow.normalizer import (
     extract_message_time,
@@ -19,6 +23,7 @@ from boss_cli.workflow.poller import sync_inbox
 
 class FakeReadClient:
     def __init__(self) -> None:
+        self.credential = Credential({"wt2": "fake"})
         self.pages: dict[int, dict[str, Any]] = {
             1: {"result": [{"friendId": 101}, {"friendId": 102}], "hasMore": True},
             2: {"result": [{"friendId": 103}], "hasMore": False},
@@ -290,3 +295,37 @@ def test_message_participants_keep_account_stable_when_cookie_rotates(tmp_path):
         assert store.list_accounts()[0]["identity_source"] == "message_participants"
     finally:
         store.close()
+
+
+def test_workflow_sync_command_uses_incremental_reader(tmp_path):
+    client = FakeReadClient()
+    db_path = tmp_path / "workflow.db"
+    credential = Credential({"wt2": "cookie"})
+    runner = CliRunner()
+
+    with (
+        patch("boss_cli.commands.workflow._get_workflow_credential", return_value=credential),
+        patch(
+            "boss_cli.commands._common.run_client_action",
+            side_effect=lambda supplied, action: action(client),
+        ),
+    ):
+        result = runner.invoke(
+            cli,
+            [
+                "workflow",
+                "sync",
+                "--db",
+                str(db_path),
+                "--history",
+                "none",
+                "--json",
+            ],
+        )
+
+    payload = json.loads(result.output)
+    assert result.exit_code == 0
+    assert payload["ok"] is True
+    assert payload["data"]["complete_scan"] is True
+    assert payload["data"]["candidates_upserted"] == 3
+    assert db_path.exists()

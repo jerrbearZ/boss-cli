@@ -94,6 +94,26 @@ def test_dashboard_service_template_and_enqueue(tmp_path):
         store.close()
 
 
+def test_dashboard_candidates_are_scoped_to_active_account(tmp_path):
+    store = init_db(tmp_path / "workflow.db")
+    try:
+        first_account = store.upsert_account(account_hash="first")
+        second_account = store.upsert_account(account_hash="second")
+        store.upsert_candidate(account_id=first_account, friend_id=101, name_redacted="A*")
+        store.upsert_candidate(account_id=second_account, friend_id=202, name_redacted="B*")
+        store.set_setting("active_account_id", second_account)
+
+        service = DashboardService(store)
+        candidates = service.candidates()
+        health = service.health()
+
+        assert [item["friend_id"] for item in candidates] == [202]
+        assert health["active_account_id"] == second_account
+        assert health["candidate_count"] == 1
+    finally:
+        store.close()
+
+
 def test_sender_marks_fake_send_verified(tmp_path):
     store = init_db(tmp_path / "workflow.db")
     try:

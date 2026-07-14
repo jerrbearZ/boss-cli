@@ -16,17 +16,19 @@ class DashboardService:
         self.store = store
 
     def health(self) -> dict[str, Any]:
+        account_id = self._active_account_id()
         return {
             "db": str(self.store.path),
             "schema_version": self.store.current_schema_version(),
             "paused": self.store.is_paused(),
             "queue": self.store.queue_summary(),
-            "candidate_count": self.store.row_count("candidates"),
+            "active_account_id": account_id,
+            "candidate_count": self.store.candidate_count(account_id=account_id),
             "event_count": self.store.row_count("events"),
         }
 
     def candidates(self, *, limit: int = 200) -> list[dict[str, Any]]:
-        return self.store.list_candidates(limit=limit)
+        return self.store.list_candidates(limit=limit, account_id=self._active_account_id())
 
     def queue(self, *, limit: int = 200) -> list[dict[str, Any]]:
         return self.store.list_queue(limit=limit)
@@ -85,3 +87,10 @@ class DashboardService:
         self.store.set_setting("paused", {"paused": False, "reason": "", "updated_at": utc_now()})
         self.store.append_event(event_type="sender_resumed", summary="Sender resumed")
         return {"paused": False}
+
+    def _active_account_id(self) -> int | None:
+        value = self.store.get_setting("active_account_id")
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None

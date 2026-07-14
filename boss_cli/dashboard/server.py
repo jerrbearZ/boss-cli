@@ -213,10 +213,15 @@ def make_handler(runtime: DashboardRuntime) -> type[BaseHTTPRequestHandler]:
                     lambda client: sync_inbox(
                         store,
                         client,
-                        credential,
+                        client.credential if isinstance(client.credential, Credential) else credential,
                         enc_job_id=str(payload.get("enc_job_id") or ""),
                         label_id=int(payload.get("label_id") or 0),
                         limit=int(payload.get("limit") or 100),
+                        max_pages=int(payload.get("max_pages") or 20),
+                        history_mode=str(payload.get("history_mode") or "changed"),  # type: ignore[arg-type]
+                        history_budget=int(payload.get("history_budget") or 20),
+                        include_profile=bool(payload.get("include_profile", False)),
+                        full_scan=bool(payload.get("full_scan", False)),
                     ),
                 )
 

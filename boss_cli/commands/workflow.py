@@ -15,6 +15,7 @@ from ..auth import Credential, load_from_env
 from ..client import BossClient
 from ..constants import CREDENTIAL_FILE
 from ..workflow import init_db
+from ..workflow.poller import sync_inbox
 from ._common import _output_structured, console, handle_command, require_auth, structured_output_options
 
 
@@ -71,6 +72,96 @@ def init_db_command(db_path: Path | None, as_json: bool, as_yaml: bool) -> None:
     console.print(f"  tables={len(data['tables'])}")
 
 
+@workflow.command("sync")
+@click.option("--db", "db_path", type=click.Path(dir_okay=False, path_type=Path), default=None, help="SQLite workflow database path")
+@click.option("--job", "enc_job_id", default="", help="按职位 encryptJobId 筛选")
+@click.option("--label", "label_id", default=0, type=int, help="按 Boss 标签筛选 (0=全部)")
+@click.option("-n", "--limit", default=100, type=click.IntRange(min=0), show_default=True, help="最多读取候选人数 (0=不限)")
+@click.option("--max-pages", default=20, type=click.IntRange(min=1), show_default=True, help="单次同步页数上限")
+@click.option(
+    "--history",
+    "history_mode",
+    type=click.Choice(["none", "changed", "all"]),
+    default="changed",
+    show_default=True,
+    help="聊天历史读取策略",
+)
+@click.option("--history-budget", default=20, type=click.IntRange(min=0), show_default=True, help="单次最多读取历史的会话数")
+@click.option("--history-count", default=50, type=click.IntRange(min=1), show_default=True, help="每次历史请求的消息数")
+@click.option("--max-history-messages", default=200, type=click.IntRange(min=1), show_default=True, help="每位候选人的历史消息上限")
+@click.option("--include-profile", is_flag=True, help="读取聊天候选人摘要；不读取可能触发提醒的完整简历")
+@click.option("--full-scan", is_flag=True, help="完整无筛选扫描后将未出现的候选人标记为 inactive")
+@click.option("--resume/--no-resume", default=True, show_default=True, help="从未完成同步的已提交页继续")
+@click.option(
+    "--allow-browser-auth",
+    is_flag=True,
+    help="允许自动读取浏览器 Cookie；无人值守同步建议保持关闭",
+)
+@structured_output_options
+def sync_command(
+    db_path: Path | None,
+    enc_job_id: str,
+    label_id: int,
+    limit: int,
+    max_pages: int,
+    history_mode: str,
+    history_budget: int,
+    history_count: int,
+    max_history_messages: int,
+    include_profile: bool,
+    full_scan: bool,
+    resume: bool,
+    allow_browser_auth: bool,
+    as_json: bool,
+    as_yaml: bool,
+) -> None:
+    """增量读取 Boss 收件箱并安全写入本地 SQLite；不会发送消息。"""
+    credential = _get_workflow_credential(
+        allow_browser_auth=allow_browser_auth,
+        as_json=as_json,
+        as_yaml=as_yaml,
+    )
+
+    def _action(client: BossClient) -> dict[str, Any]:
+        effective_credential = client.credential if isinstance(client.credential, Credential) else credential
+        with init_db(db_path) as store:
+            return sync_inbox(
+                store,
+                client,
+                effective_credential,
+                enc_job_id=enc_job_id,
+                label_id=label_id,
+                limit=limit,
+                max_pages=max_pages,
+                history_mode=history_mode,  # type: ignore[arg-type]
+                history_budget=history_budget,
+                history_count=history_count,
+                max_history_messages=max_history_messages,
+                include_profile=include_profile,
+                full_scan=full_scan,
+                resume=resume,
+                requested_by="cli",
+            )
+
+    handle_command(
+        credential,
+        action=_action,
+        render=_render_sync,
+        as_json=as_json,
+        as_yaml=as_yaml,
+    )
+
+
+def _render_sync(data: dict[str, Any]) -> None:
+    console.print("[bold cyan]Boss inbox synchronization complete[/bold cyan]")
+    console.print(f"  account={data.get('account_id')} pages={data.get('pages')} seen={data.get('seen')}")
+    console.print(
+        "  candidates="
+        f"{data.get('candidates_upserted')} messages_inserted={data.get('messages_inserted')} "
+        f"history={data.get('history_conversations')} errors={data.get('errors')}"
+    )
+
+
 @workflow.command("dry-run")
 @click.option("--job", "enc_job_id", default="", help="按职位 encryptJobId 筛选")
 @click.option("--label", "label_id", default=0, type=int, help="按 Boss 标签筛选 (0=全部)")
@@ -104,7 +195,7 @@ def dry_run(
     as_yaml: bool,
 ) -> None:
     """只读评估 Boss 候选人并输出下一步建议，不发送消息。"""
-    cred = _get_dry_run_credential(allow_browser_auth=allow_browser_auth, as_json=as_json, as_yaml=as_yaml)
+    cred = _get_workflow_credential(allow_browser_auth=allow_browser_auth, as_json=as_json, as_yaml=as_yaml)
     rules = _load_rules(rules_file)
 
     def _action(client: BossClient) -> dict[str, Any]:
@@ -145,7 +236,7 @@ def _load_rules(rules_file: str | None) -> dict[str, Any]:
     return rules
 
 
-def _get_dry_run_credential(*, allow_browser_auth: bool, as_json: bool, as_yaml: bool) -> Credential:
+def _get_workflow_credential(*, allow_browser_auth: bool, as_json: bool, as_yaml: bool) -> Credential:
     """Load credentials for automation without blocking on browser extraction by default."""
     if allow_browser_auth:
         return require_auth()
