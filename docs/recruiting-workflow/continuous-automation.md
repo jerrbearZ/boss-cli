@@ -89,13 +89,15 @@ A new inbound message becomes a new trigger. Changing the approved catalog also 
 
 ## Model And Privacy Boundary
 
-The selector uses the OpenAI Responses API through `httpx` and sets `store: false`. Configuration:
+The selector uses Alibaba Cloud Model Studio's OpenAI-compatible Chat Completions API through `httpx`.
+It calls Qwen in non-thinking JSON mode, then independently validates the returned outcome, confidence,
+and approved template ID before anything can be queued. Configuration:
 
 ```bash
-export OPENAI_API_KEY='<key>'
-export BOSS_LLM_MODEL='<responses-api-model>'
-# Optional for a compatible endpoint:
-export OPENAI_BASE_URL='https://api.openai.com/v1'
+export DASHSCOPE_API_KEY='<key>'
+# Optional overrides; these are the defaults:
+export BOSS_LLM_MODEL='qwen-plus'
+export DASHSCOPE_BASE_URL='https://dashscope.aliyuncs.com/compatible-mode/v1'
 ```
 
 The model receives:
@@ -125,6 +127,26 @@ boss dashboard --port 8765
 ```
 
 Save drafts, inspect their exact text and guidance, then approve them in the template catalog. The daemon will not decide or send when no approved template exists.
+
+The repository includes an approved automotive/WeChat catalog. Install it idempotently with:
+
+```bash
+boss workflow install-templates --retire-existing --json
+```
+
+`--retire-existing` explicitly retires active templates outside this catalog. Omit it when adding the
+catalog alongside other intentionally active templates. The catalog contains three contact-exchange replies
+and three automotive extended-warranty introductions. Each has separate selection guidance, and the model
+can only return one of their approved IDs.
+
+| Template | Approved message | Selection intent |
+| --- | --- | --- |
+| `wechat_agreement_direct` | `OK，好的，交换个微信。` | Candidate explicitly accepts an earlier WeChat exchange suggestion. |
+| `wechat_agreement_warm` | `好的，可以的，我们交换个微信吧。` | Candidate agrees to continue on WeChat and a warmer acknowledgement fits. |
+| `wechat_candidate_requested` | `可以，方便的话我们交换一下微信。` | Candidate directly asks to add or exchange WeChat. |
+| `automotive_warranty_intro_direct` | `我们在做汽车延长保修服务，感兴趣的话，交换一个微信。` | Candidate asks what the business or opportunity does. |
+| `automotive_warranty_intro_conversational` | `我们主要做汽车延长保修服务，如果你感兴趣，可以交换微信进一步沟通。` | Candidate asks for context before continuing. |
+| `automotive_warranty_role_context` | `这个岗位与汽车延长保修服务相关，如果你想进一步了解，我们可以交换微信详聊。` | Candidate asks specifically what the role is related to. |
 
 ### 3. Validate one dry cycle
 
@@ -196,7 +218,7 @@ It remains a trusted localhost application without user authentication. Do not b
 
 - Polling is not real-time and may be throttled by BOSS risk controls.
 - One daemon name and one active BOSS account are the supported operating shape.
-- The model provider is currently the OpenAI Responses API or a compatible endpoint.
+- The model provider is Alibaba Cloud Model Studio, using the `qwen-plus` alias by default.
 - Browser UI selectors may change when BOSS Web changes.
 - The dashboard does not resolve review decisions or retry individual actions yet.
 - Process supervision, secrets management, and OS startup installation are deployment responsibilities.

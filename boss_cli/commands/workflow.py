@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import signal
 import sys
@@ -20,7 +19,12 @@ from ..constants import CREDENTIAL_FILE
 from ..workflow import init_db
 from ..workflow.automation import AutomationConfig, run_automation_cycle, run_daemon
 from ..workflow.poller import sync_inbox
-from ..workflow.selector import OpenAIResponsesSelector
+from ..workflow.selector import (
+    DEFAULT_DASHSCOPE_BASE_URL,
+    DEFAULT_QWEN_MODEL,
+    AlibabaQwenSelector,
+)
+from ..workflow.templates import install_automotive_wechat_templates
 from ._common import (
     _output_structured,
     console,
@@ -81,6 +85,39 @@ def init_db_command(db_path: Path | None, as_json: bool, as_yaml: bool) -> None:
     console.print(f"  db={data['db']}")
     console.print(f"  schema_version={data['schema_version']}")
     console.print(f"  tables={len(data['tables'])}")
+
+
+@workflow.command("install-templates")
+@click.option(
+    "--db",
+    "db_path",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="SQLite workflow database path",
+)
+@click.option(
+    "--retire-existing",
+    is_flag=True,
+    help="Retire all active templates outside the curated automotive/WeChat catalog",
+)
+@structured_output_options
+def install_templates_command(
+    db_path: Path | None,
+    retire_existing: bool,
+    as_json: bool,
+    as_yaml: bool,
+) -> None:
+    """Install the approved automotive/WeChat reply catalog."""
+    with init_db(db_path) as store:
+        data = install_automotive_wechat_templates(store, retire_existing=retire_existing)
+    if as_json or as_yaml or not sys.stdout.isatty():
+        _output_structured(data, as_json=as_json, as_yaml=as_yaml)
+        return
+    console.print(
+        f"[bold cyan]Template catalog installed[/bold cyan] "
+        f"version={data['catalog_version']} templates={len(data['templates'])} "
+        f"retired={len(data['retired_template_ids'])}"
+    )
 
 
 @workflow.command("sync")
@@ -175,8 +212,20 @@ def _render_sync(data: dict[str, Any]) -> None:
 
 @workflow.command("daemon")
 @click.option("--db", "db_path", type=click.Path(dir_okay=False, path_type=Path), default=None, help="SQLite workflow database path")
-@click.option("--model", default=lambda: os.environ.get("BOSS_LLM_MODEL", ""), help="OpenAI model used only to select approved templates")
-@click.option("--api-base", default=lambda: os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"), show_default=True)
+@click.option(
+    "--model",
+    default=DEFAULT_QWEN_MODEL,
+    envvar="BOSS_LLM_MODEL",
+    show_default=True,
+    help="Alibaba Qwen model used only to select approved templates",
+)
+@click.option(
+    "--api-base",
+    default=DEFAULT_DASHSCOPE_BASE_URL,
+    envvar="DASHSCOPE_BASE_URL",
+    show_default=True,
+    help="Alibaba Model Studio OpenAI-compatible API base",
+)
 @click.option("--poll-interval", default=30.0, type=click.FloatRange(min=1), show_default=True, help="Seconds between inbox probes")
 @click.option("--error-backoff", default=120.0, type=click.FloatRange(min=1), show_default=True, help="Seconds to wait after a failed cycle")
 @click.option("--candidate-limit", default=20, type=click.IntRange(min=1), show_default=True, help="Maximum new inbound conversations decided per cycle")
@@ -213,7 +262,7 @@ def daemon_command(
     if (as_json or as_yaml) and not once:
         raise click.ClickException("--json and --yaml require --once for daemon output")
     try:
-        selector = OpenAIResponsesSelector(model=model, base_url=api_base)
+        selector = AlibabaQwenSelector(model=model, base_url=api_base)
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
     credential = _get_workflow_credential(

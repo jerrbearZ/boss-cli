@@ -10,7 +10,7 @@ from boss_cli.auth import Credential
 from boss_cli.browser_reply import BrowserReplyResult, BrowserWechatResult
 from boss_cli.workflow import init_db
 from boss_cli.workflow.automation import AutomationConfig, run_automation_cycle, run_daemon
-from boss_cli.workflow.selector import OpenAIResponsesSelector, TemplateSelection, TemplateSelectionError
+from boss_cli.workflow.selector import AlibabaQwenSelector, TemplateSelection, TemplateSelectionError
 
 
 class FakeBossClient:
@@ -101,33 +101,47 @@ def approved_template(store, *, version="v1"):
     )
 
 
-def test_openai_selector_uses_strict_catalog_and_validates_selection():
+def test_qwen_selector_uses_json_mode_and_validates_selection():
     captured = {}
 
     def fake_post(url, headers, payload, timeout):
         captured.update({"url": url, "headers": headers, "payload": payload, "timeout": timeout})
         value = {"outcome": "selected", "template_id": 7, "confidence": 0.91, "reason": "Direct interest"}
-        return {"status": "completed", "output": [{"content": [{"type": "output_text", "text": json.dumps(value)}]}]}
+        return {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(value)}}]}
 
-    selector = OpenAIResponsesSelector(api_key="secret", model="model-1", post_json=fake_post)
+    selector = AlibabaQwenSelector(api_key="secret", model="qwen-plus", post_json=fake_post)
     result = selector.select(
         {"job_name": "Sales", "messages": [{"direction": "inbound", "content_kind": "text", "text_redacted": "hello"}]},
         [{"id": 7, "name": "reply", "body": "Approved text", "approved": 1, "active": 1, "retired_at": None}],
     )
 
     assert result.template_id == 7
-    assert captured["payload"]["store"] is False
-    assert captured["payload"]["text"]["format"]["strict"] is True
-    assert captured["payload"]["text"]["format"]["schema"]["properties"]["template_id"]["anyOf"][0]["enum"] == [7]
+    assert captured["url"].endswith("/chat/completions")
+    assert captured["payload"]["model"] == "qwen-plus"
+    assert captured["payload"]["response_format"] == {"type": "json_object"}
+    assert captured["payload"]["enable_thinking"] is False
+    assert "one of [7]" in captured["payload"]["messages"][0]["content"]
 
 
-def test_openai_selector_rejects_id_outside_catalog():
+def test_qwen_selector_rejects_id_outside_catalog():
     def fake_post(url, headers, payload, timeout):
         value = {"outcome": "selected", "template_id": 99, "confidence": 1, "reason": "invalid"}
-        return {"status": "completed", "output": [{"content": [{"type": "output_text", "text": json.dumps(value)}]}]}
+        return {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(value)}}]}
 
-    selector = OpenAIResponsesSelector(api_key="secret", model="model-1", post_json=fake_post)
+    selector = AlibabaQwenSelector(api_key="secret", model="qwen-plus", post_json=fake_post)
     with pytest.raises(TemplateSelectionError, match="outside the approved catalog"):
+        selector.select(
+            {"messages": []},
+            [{"id": 7, "body": "Approved", "approved": 1, "active": 1, "retired_at": None}],
+        )
+
+
+def test_qwen_selector_rejects_non_object_json():
+    def fake_post(url, headers, payload, timeout):
+        return {"choices": [{"finish_reason": "stop", "message": {"content": "[]"}}]}
+
+    selector = AlibabaQwenSelector(api_key="secret", post_json=fake_post)
+    with pytest.raises(TemplateSelectionError, match="non-object"):
         selector.select(
             {"messages": []},
             [{"id": 7, "body": "Approved", "approved": 1, "active": 1, "retired_at": None}],

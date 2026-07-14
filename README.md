@@ -192,8 +192,11 @@ Persist recruiter jobs, inbox conversations, latest messages, and bounded chat h
 ```bash
 boss workflow init-db
 boss workflow sync --limit 100 --history changed --history-budget 20 --json
-export OPENAI_API_KEY='<key>'
-export BOSS_LLM_MODEL='<responses-api-model>'
+boss workflow install-templates --retire-existing --json
+export DASHSCOPE_API_KEY='<key>'
+# Optional overrides; these are the defaults:
+export BOSS_LLM_MODEL='qwen-plus'
+export DASHSCOPE_BASE_URL='https://dashscope.aliyuncs.com/compatible-mode/v1'
 boss workflow daemon --once --json                            # Sync and record constrained decisions; no sends
 boss workflow daemon --live --action-delay 60                 # Continuous verified reply + WeChat execution
 boss workflow daemon-status --json
