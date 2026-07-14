@@ -614,6 +614,17 @@ def _request_wechat_from_page(
     except Exception as exc:
         raise BrowserReplyError("换微信控件无法点击", code="browser_wechat_click_failed") from exc
 
+    page.wait_for_timeout(500)
+    for label in ("同意", "接受"):
+        try:
+            consent = page.get_by_text(label, exact=True).last
+            if consent.count() and consent.is_visible(timeout=1_000):
+                consent.click(timeout=5_000)
+                page.wait_for_timeout(300)
+                break
+        except Exception:
+            continue
+
     for label in ("确认交换", "确认", "确定"):
         try:
             confirm = page.get_by_text(label, exact=True).last
@@ -634,6 +645,11 @@ def _request_wechat_from_page(
         "微信交换请求已发送",
         "已发送交换微信",
         "已申请交换微信",
+        "已成功交换微信",
+        "双方已交换微信",
+        "微信已交换",
+        "已交换微信",
+        "查看微信",
     )
     matched_token = next((token for token in success_tokens if token in after and (token not in before or after != before)), "")
     if not matched_token:

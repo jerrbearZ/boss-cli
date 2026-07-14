@@ -198,3 +198,70 @@ def test_request_wechat_dom_requires_visible_success_change():
     assert method == "dom.exchange-wechat"
     assert verification["matched"] is True
     assert verification["indicator"] == "等待对方同意"
+
+
+def test_request_wechat_accepts_incoming_exchange_before_confirming():
+    calls = []
+
+    class FakeControl:
+        def __init__(self, label, click):
+            self.label = label
+            self._click = click
+            self.last = self
+
+        def count(self):
+            return 1
+
+        def is_visible(self, timeout=0):
+            return True
+
+        def click(self, timeout=0):
+            calls.append(self.label)
+            self._click()
+
+    class EmptyControl:
+        def __init__(self):
+            self.last = self
+
+        def count(self):
+            return 0
+
+        def is_visible(self, timeout=0):
+            return False
+
+    class FakeConversation:
+        completed = False
+
+        def inner_text(self, timeout=0):
+            return "双方已交换微信" if self.completed else "换微信"
+
+        def get_by_text(self, label, exact=True):
+            if label == "换微信":
+                return FakeControl(label, lambda: None)
+            return EmptyControl()
+
+    class FakePage:
+        def __init__(self):
+            self.conversation = FakeConversation()
+
+        def get_by_text(self, label, exact=True):
+            if label == "同意":
+                return FakeControl(label, lambda: None)
+            if label == "确定":
+                return FakeControl(label, lambda: setattr(self.conversation, "completed", True))
+            return EmptyControl()
+
+        def wait_for_timeout(self, timeout):
+            return None
+
+    page = FakePage()
+    target = BrowserReplyTarget(friend_id=123, friend_source=0, encrypt_uid="enc-uid")
+    with patch("boss_cli.browser_reply._prepare_chat_page"), patch(
+        "boss_cli.browser_reply._select_target_conversation",
+        return_value=page.conversation,
+    ):
+        method, verification = _request_wechat_from_page(page, target, timeout_ms=1000)
+
+    assert calls == ["换微信", "同意", "确定"]
+    assert method == "dom.exchange-wechat"
+    assert verification == {"status": "matched", "matched": True, "indicator": "双方已交换微信"}
