@@ -3,17 +3,18 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Boss Workflow Dashboard</title>
+    <title>BOSS Operations</title>
     <link rel="stylesheet" href="/static/app.css">
   </head>
   <body>
     <div class="app-shell">
       <header class="topbar">
-        <div>
-          <h1>Boss Workflow Dashboard</h1>
-          <p id="dbPath">Local workflow control</p>
+        <div class="brand-block">
+          <h1>BOSS Operations</h1>
+          <p id="dbPath">Local workflow database</p>
         </div>
         <div class="top-actions">
+          <span id="runtimeState" class="runtime-state">Idle</span>
           <button id="refreshBtn" type="button">Refresh</button>
           <button id="pauseBtn" type="button">Pause</button>
           <button id="resumeBtn" type="button">Resume</button>
@@ -22,63 +23,76 @@
       </header>
 
       <main class="layout">
-        <section class="panel status-panel" aria-label="System status">
-          <h2>Status</h2>
-          <div class="metric-grid">
-            <div><span>Paused</span><strong id="pausedMetric">-</strong></div>
-            <div><span>Sender</span><strong id="senderMetric">-</strong></div>
-            <div><span>Candidates</span><strong id="candidateMetric">0</strong></div>
-            <div><span>Queued</span><strong id="queuedMetric">0</strong></div>
-            <div><span>Verified</span><strong id="verifiedMetric">0</strong></div>
-            <div><span>Failed</span><strong id="failedMetric">0</strong></div>
+        <section class="status-band" aria-label="System status">
+          <div><span>Account</span><strong id="accountMetric">-</strong></div>
+          <div><span>Candidates</span><strong id="candidateMetric">0</strong></div>
+          <div><span>Queued</span><strong id="queuedMetric">0</strong></div>
+          <div><span>Verified</span><strong id="verifiedMetric">0</strong></div>
+          <div><span>Failed</span><strong id="failedMetric">0</strong></div>
+          <div><span>Paused</span><strong id="pausedMetric">-</strong></div>
+        </section>
+
+        <section class="workspace sync-workspace" aria-label="Inbox synchronization">
+          <div class="section-title">
+            <h2>Inbox Sync</h2>
+            <button id="syncBtn" class="primary" type="button">Sync</button>
+          </div>
+          <div class="form-grid sync-grid">
+            <label>Candidate limit<input id="syncLimit" type="number" min="1" max="500" value="100"></label>
+            <label>Label ID<input id="syncLabel" type="number" min="0" value="0"></label>
+            <label>Job ID<input id="syncJob" type="text" placeholder="All jobs"></label>
+            <label>History budget<input id="historyBudget" type="number" min="0" max="200" value="20"></label>
           </div>
         </section>
 
-        <section class="panel control-panel" aria-label="Workflow controls">
-          <h2>Control Room</h2>
-          <div class="form-grid">
-            <label>Limit <input id="syncLimit" type="number" min="1" max="500" value="100"></label>
-            <label>Label <input id="syncLabel" type="number" min="0" value="0"></label>
-            <label>Job <input id="syncJob" type="text" placeholder="optional encJobId"></label>
+        <section class="workspace batch-workspace" aria-label="Batch action composer">
+          <div class="section-title">
+            <h2>Batch Actions</h2>
+            <strong><span id="selectionCount">0</span> selected</strong>
           </div>
-          <div class="button-row">
-            <button id="syncBtn" type="button">Sync Inbox</button>
-            <button id="selectVisibleBtn" type="button">Select Visible</button>
-            <button id="clearSelectionBtn" type="button">Clear</button>
+
+          <fieldset class="action-mode">
+            <legend>Actions</legend>
+            <label><input id="sendMessageAction" type="checkbox" checked> Send message</label>
+            <label><input id="requestWechatAction" type="checkbox"> Request WeChat</label>
+          </fieldset>
+
+          <div id="messageFields" class="message-fields">
+            <div class="template-row">
+              <label>Template name<input id="templateName" type="text" value="dashboard_message"></label>
+              <span>Template <strong id="templateId">none</strong></span>
+            </div>
+            <label>Message<textarea id="messageBody" rows="5" placeholder="Write the exact batch reply"></textarea></label>
+            <button id="saveTemplateBtn" type="button">Approve Message</button>
           </div>
-          <div class="send-controls">
-            <label>Max sends <input id="maxActions" type="number" min="1" max="100" value="5"></label>
-            <label>Delay seconds <input id="delaySeconds" type="number" min="0" max="600" value="60"></label>
-            <button id="startSenderBtn" class="primary" type="button">Start Sender</button>
+
+          <div class="execution-row">
+            <label>Action limit<input id="maxActions" type="number" min="1" max="100" value="10"></label>
+            <label>Delay seconds<input id="delaySeconds" type="number" min="1" max="600" value="60"></label>
+            <button id="enqueueBtn" class="primary" type="button">Queue Selected</button>
+            <button id="startSenderBtn" class="send-button" type="button">Run Queue</button>
           </div>
         </section>
 
-        <section class="panel composer-panel" aria-label="Message composer">
-          <h2>Message Composer</h2>
-          <label>Template name <input id="templateName" type="text" value="dashboard_message"></label>
-          <textarea id="messageBody" rows="5" placeholder="Type the exact message to send"></textarea>
-          <div class="button-row">
-            <button id="saveTemplateBtn" type="button">Approve Template</button>
-            <button id="enqueueBtn" class="primary" type="button">Enqueue Selected</button>
-          </div>
-          <p class="hint"><span id="selectionCount">0</span> selected. Template id: <span id="templateId">none</span></p>
-        </section>
-
-        <section class="panel table-panel candidates-panel" aria-label="Inbox review">
-          <div class="section-head">
-            <h2>Inbox Review</h2>
-            <input id="candidateFilter" type="search" placeholder="Filter candidates">
+        <section class="workspace table-workspace candidates-workspace" aria-label="Inbox review">
+          <div class="section-title table-title">
+            <h2>Candidate Inbox</h2>
+            <div class="table-tools">
+              <input id="candidateFilter" type="search" placeholder="Filter candidates">
+              <button id="selectVisibleBtn" type="button">Select visible</button>
+              <button id="clearSelectionBtn" type="button">Clear</button>
+            </div>
           </div>
           <div class="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Select</th>
+                  <th class="select-column">Select</th>
                   <th>Candidate</th>
                   <th>Job</th>
                   <th>Stage</th>
-                  <th>Latest</th>
-                  <th>Outbound</th>
+                  <th>Latest message</th>
+                  <th>Last action</th>
                 </tr>
               </thead>
               <tbody id="candidateRows"></tbody>
@@ -86,13 +100,17 @@
           </div>
         </section>
 
-        <section class="panel table-panel queue-panel" aria-label="Queue">
-          <h2>Queue</h2>
+        <section class="workspace table-workspace queue-workspace" aria-label="Outbound queue">
+          <div class="section-title">
+            <h2>Outbound Queue</h2>
+            <span><strong id="messageActionMetric">0</strong> messages / <strong id="wechatActionMetric">0</strong> WeChat</span>
+          </div>
           <div class="table-wrap">
             <table>
               <thead>
                 <tr>
                   <th>Status</th>
+                  <th>Action</th>
                   <th>Candidate</th>
                   <th>Template</th>
                   <th>Attempts</th>
@@ -104,8 +122,8 @@
           </div>
         </section>
 
-        <section class="panel events-panel" aria-label="Events">
-          <h2>Events</h2>
+        <section class="workspace events-workspace" aria-label="Audit events">
+          <div class="section-title"><h2>Audit Events</h2></div>
           <ol id="eventRows"></ol>
         </section>
       </main>
