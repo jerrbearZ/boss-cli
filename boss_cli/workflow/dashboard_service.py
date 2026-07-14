@@ -25,6 +25,9 @@ class DashboardService:
             "active_account_id": account_id,
             "candidate_count": self.store.candidate_count(account_id=account_id),
             "event_count": self.store.row_count("events"),
+            "automation": self.store.automation_summary(account_id=account_id),
+            "delivery": self.store.delivery_summary(account_id=account_id),
+            "daemon": self.store.get_daemon_state(),
         }
 
     def candidates(self, *, limit: int = 200) -> list[dict[str, Any]]:
@@ -42,25 +45,33 @@ class DashboardService:
     def templates(self) -> list[dict[str, Any]]:
         return self.store.list_templates()
 
+    def decisions(self, *, limit: int = 200) -> list[dict[str, Any]]:
+        return self.store.list_automation_decisions(account_id=self._active_account_id(), limit=limit)
+
     def create_template(
         self,
         *,
         name: str,
         body: str,
         version: str | None = None,
-        approved: bool = True,
+        approved: bool = False,
+        selection_guidance: str = "",
     ) -> dict[str, Any]:
         if not body.strip():
             raise ValueError("Template body cannot be empty")
         template_version = version or f"{utc_now().replace(':', '').replace('-', '')}-{uuid.uuid4().hex[:8]}"
+        template_name = name or "dashboard_message"
+        if self.store.get_template_version(name=template_name, version=template_version):
+            raise ValueError("Template versions are immutable; save this edit as a new version")
         template_id = self.store.upsert_template(
-            name=name or "dashboard_message",
+            name=template_name,
             version=template_version,
             body=body,
             approved=approved,
             active=approved,
             approved_by="dashboard",
             approved_at=utc_now() if approved else None,
+            selection_guidance=selection_guidance,
         )
         self.store.append_event(
             event_type="template_approved" if approved else "template_saved",
@@ -69,6 +80,30 @@ class DashboardService:
         )
         template = self.store.get_template(template_id)
         return template or {"id": template_id}
+
+    def approve_template(self, template_id: int) -> dict[str, Any]:
+        template = self.store.get_template(template_id)
+        if not template:
+            raise ValueError(f"Unknown template id: {template_id}")
+        self.store.set_template_approval(template_id, approved=True, approved_by="dashboard")
+        self.store.append_event(
+            event_type="template_approved",
+            summary=f"Template {template['name']}:{template['version']} approved",
+            details={"template_id": template_id},
+        )
+        return self.store.get_template(template_id) or {"id": template_id}
+
+    def retire_template(self, template_id: int) -> dict[str, Any]:
+        template = self.store.get_template(template_id)
+        if not template:
+            raise ValueError(f"Unknown template id: {template_id}")
+        self.store.retire_template(template_id)
+        self.store.append_event(
+            event_type="template_retired",
+            summary=f"Template {template['name']}:{template['version']} retired",
+            details={"template_id": template_id},
+        )
+        return self.store.get_template(template_id) or {"id": template_id}
 
     def enqueue(
         self,
@@ -93,12 +128,12 @@ class DashboardService:
 
     def pause(self, *, reason: str = "operator") -> dict[str, Any]:
         self.store.set_setting("paused", {"paused": True, "reason": reason, "updated_at": utc_now()})
-        self.store.append_event(event_type="sender_paused", summary=f"Sender paused: {reason}")
+        self.store.append_event(event_type="automation_paused", summary=f"Automation paused: {reason}")
         return {"paused": True, "reason": reason}
 
     def resume(self) -> dict[str, Any]:
         self.store.set_setting("paused", {"paused": False, "reason": "", "updated_at": utc_now()})
-        self.store.append_event(event_type="sender_resumed", summary="Sender resumed")
+        self.store.append_event(event_type="automation_resumed", summary="Automation resumed")
         return {"paused": False}
 
     def _active_account_id(self) -> int | None:

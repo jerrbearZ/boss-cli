@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import mimetypes
-import threading
 import webbrowser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -12,78 +11,17 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from ..auth import Credential, load_credential, load_from_env
-from ..commands._common import run_client_action
 from ..workflow import init_db
 from ..workflow.dashboard_service import DashboardService
-from ..workflow.poller import sync_inbox
-from ..workflow.sender import send_queued_actions
 
 STATIC_DIR = Path(__file__).with_name("static")
 
 
 class DashboardRuntime:
-    """Mutable process state for one local dashboard server."""
+    """Configuration shared by local dashboard request handlers."""
 
     def __init__(self, db_path: Path):
         self.db_path = db_path
-        self._lock = threading.Lock()
-        self._sender_thread: threading.Thread | None = None
-        self._stop_event = threading.Event()
-        self.sender_result: dict[str, Any] | None = None
-        self.sender_error: str | None = None
-
-    def sender_state(self) -> dict[str, Any]:
-        with self._lock:
-            running = self._sender_thread is not None and self._sender_thread.is_alive()
-            return {
-                "running": running,
-                "stop_requested": self._stop_event.is_set(),
-                "result": self.sender_result,
-                "error": self.sender_error,
-            }
-
-    def start_sender(self, *, max_actions: int, engine: str, delay_seconds: float) -> dict[str, Any]:
-        credential = _load_dashboard_credential()
-        if credential is None:
-            raise DashboardError("No saved Boss credential. Run `boss login` first.", status=HTTPStatus.UNAUTHORIZED)
-        with init_db(self.db_path) as store:
-            raw_account_id = store.get_setting("active_account_id")
-            if raw_account_id is None:
-                raise DashboardError("Sync the inbox before running outbound actions")
-            account_id = int(raw_account_id)
-
-        with self._lock:
-            if self._sender_thread is not None and self._sender_thread.is_alive():
-                raise DashboardError("Sender is already running", status=HTTPStatus.CONFLICT)
-            self._stop_event = threading.Event()
-            self.sender_result = None
-            self.sender_error = None
-
-            def _run() -> None:
-                try:
-                    with init_db(self.db_path) as store:
-                        self.sender_result = send_queued_actions(
-                            store,
-                            credential,
-                            max_actions=max_actions,
-                            engine=engine,
-                            stop_requested=self._stop_event.is_set,
-                            delay_seconds=delay_seconds,
-                            account_id=account_id,
-                        )
-                except Exception as exc:  # noqa: BLE001 - surface worker errors to dashboard.
-                    self.sender_error = str(exc)
-
-            self._sender_thread = threading.Thread(target=_run, name="boss-dashboard-sender", daemon=True)
-            self._sender_thread.start()
-        return self.sender_state()
-
-    def stop_sender(self) -> dict[str, Any]:
-        self._stop_event.set()
-        with init_db(self.db_path) as store:
-            store.append_event(event_type="sender_stop_requested", summary="Dashboard stop requested")
-        return self.sender_state()
 
 
 class DashboardError(Exception):
@@ -109,7 +47,6 @@ def run_dashboard(*, db_path: Path, host: str, port: int, open_browser: bool = T
     except KeyboardInterrupt:
         pass
     finally:
-        runtime.stop_sender()
         server.server_close()
 
 
@@ -129,17 +66,17 @@ def make_handler(runtime: DashboardRuntime) -> type[BaseHTTPRequestHandler]:
                     self._serve_static(parsed.path.removeprefix("/static/"))
                     return
                 if parsed.path == "/api/health":
-                    self._send_json(self._with_store(lambda service: service.health() | {"sender": runtime.sender_state()}))
-                    return
-                if parsed.path == "/api/candidates":
-                    limit = _int_query(parsed.query, "limit", 200)
-                    self._send_json(self._with_store(lambda service: service.candidates(limit=limit)))
+                    self._send_json(self._with_store(lambda service: service.health()))
                     return
                 if parsed.path == "/api/queue":
                     self._send_json(self._with_store(lambda service: service.queue(limit=200)))
                     return
                 if parsed.path == "/api/templates":
                     self._send_json(self._with_store(lambda service: service.templates()))
+                    return
+                if parsed.path == "/api/decisions":
+                    limit = _int_query(parsed.query, "limit", 200)
+                    self._send_json(self._with_store(lambda service: service.decisions(limit=limit)))
                     return
                 if parsed.path == "/api/events":
                     self._send_json(self._with_store(lambda service: service.events(limit=200)))
@@ -157,9 +94,6 @@ def make_handler(runtime: DashboardRuntime) -> type[BaseHTTPRequestHandler]:
             try:
                 parsed = urlparse(self.path)
                 payload = self._read_json()
-                if parsed.path == "/api/sync":
-                    self._send_json(self._sync(payload))
-                    return
                 if parsed.path == "/api/templates":
                     self._send_json(
                         self._with_store(
@@ -167,56 +101,31 @@ def make_handler(runtime: DashboardRuntime) -> type[BaseHTTPRequestHandler]:
                                 name=str(payload.get("name") or "dashboard_message"),
                                 body=str(payload.get("body") or ""),
                                 version=str(payload.get("version") or "") or None,
-                                approved=bool(payload.get("approved", True)),
+                                approved=False,
+                                selection_guidance=str(payload.get("selection_guidance") or ""),
                             )
                         )
                     )
                     return
-                if parsed.path == "/api/enqueue":
-                    if payload.get("confirmed") is not True:
-                        raise DashboardError("Batch confirmation is required")
-                    candidate_ids = [int(item) for item in payload.get("candidate_ids", [])]
-                    if not candidate_ids or len(candidate_ids) > 500:
-                        raise DashboardError("Select between 1 and 500 candidates")
-                    template_id = int(payload["template_id"]) if payload.get("template_id") else None
-                    send_message = bool(payload.get("send_message", True))
-                    request_wechat = bool(payload.get("request_wechat", False))
+                if parsed.path == "/api/templates/approve":
+                    template_id = int(payload.get("template_id") or 0)
+                    if template_id <= 0:
+                        raise DashboardError("A template id is required")
                     self._send_json(
-                        self._with_store(
-                            lambda service: service.enqueue(
-                                candidate_ids=candidate_ids,
-                                template_id=template_id,
-                                send_message=send_message,
-                                request_wechat=request_wechat,
-                            )
-                        )
+                        self._with_store(lambda service: service.approve_template(template_id))
                     )
                     return
-                if parsed.path == "/api/sender/start":
-                    if payload.get("confirmed") is not True:
-                        raise DashboardError("Queue-run confirmation is required")
-                    max_actions = int(payload.get("max_actions") or 5)
-                    delay_seconds = float(payload.get("delay_seconds") or 60)
-                    if not 1 <= max_actions <= 100:
-                        raise DashboardError("Action limit must be between 1 and 100")
-                    if not 1 <= delay_seconds <= 600:
-                        raise DashboardError("Delay must be between 1 and 600 seconds")
-                    self._send_json(
-                        runtime.start_sender(
-                            max_actions=max_actions,
-                            engine=str(payload.get("engine") or "camoufox"),
-                            delay_seconds=delay_seconds,
-                        )
-                    )
+                if parsed.path == "/api/templates/retire":
+                    template_id = int(payload.get("template_id") or 0)
+                    if template_id <= 0:
+                        raise DashboardError("A template id is required")
+                    self._send_json(self._with_store(lambda service: service.retire_template(template_id)))
                     return
-                if parsed.path == "/api/sender/stop":
-                    self._send_json(runtime.stop_sender())
-                    return
-                if parsed.path == "/api/sender/pause":
+                if parsed.path == "/api/automation/pause":
                     reason = str(payload.get("reason") or "operator")
                     self._send_json(self._with_store(lambda service: service.pause(reason=reason)))
                     return
-                if parsed.path == "/api/sender/resume":
+                if parsed.path == "/api/automation/resume":
                     self._send_json(self._with_store(lambda service: service.resume()))
                     return
                 raise DashboardError("Not found", status=HTTPStatus.NOT_FOUND)
@@ -231,28 +140,6 @@ def make_handler(runtime: DashboardRuntime) -> type[BaseHTTPRequestHandler]:
         def _with_store(self, fn: Any) -> Any:
             with init_db(runtime.db_path) as store:
                 return fn(DashboardService(store))
-
-        def _sync(self, payload: dict[str, Any]) -> dict[str, Any]:
-            credential = _load_dashboard_credential()
-            if credential is None:
-                raise DashboardError("No saved Boss credential. Run `boss login` first.", status=HTTPStatus.UNAUTHORIZED)
-            with init_db(runtime.db_path) as store:
-                return run_client_action(
-                    credential,
-                    lambda client: sync_inbox(
-                        store,
-                        client,
-                        client.credential if isinstance(client.credential, Credential) else credential,
-                        enc_job_id=str(payload.get("enc_job_id") or ""),
-                        label_id=int(payload.get("label_id") or 0),
-                        limit=int(payload.get("limit") or 100),
-                        max_pages=int(payload.get("max_pages") or 20),
-                        history_mode=str(payload.get("history_mode") or "changed"),  # type: ignore[arg-type]
-                        history_budget=int(payload.get("history_budget") or 20),
-                        include_profile=bool(payload.get("include_profile", False)),
-                        full_scan=bool(payload.get("full_scan", False)),
-                    ),
-                )
 
         def _serve_static(self, name: str) -> None:
             path = (STATIC_DIR / name).resolve()
@@ -293,10 +180,6 @@ def make_handler(runtime: DashboardRuntime) -> type[BaseHTTPRequestHandler]:
             self.wfile.write(body)
 
     return DashboardHandler
-
-
-def _load_dashboard_credential() -> Credential | None:
-    return load_credential() or load_from_env()
 
 
 def _int_query(query: str, key: str, default: int) -> int:

@@ -94,6 +94,22 @@ def test_dashboard_service_template_and_enqueue(tmp_path):
         store.close()
 
 
+def test_dashboard_template_versions_are_immutable(tmp_path):
+    store = init_db(tmp_path / "workflow.db")
+    try:
+        service = DashboardService(store)
+        service.create_template(name="reply", version="v1", body="First", approved=False)
+
+        try:
+            service.create_template(name="reply", version="v1", body="Edited", approved=False)
+        except ValueError as exc:
+            assert "immutable" in str(exc)
+        else:
+            raise AssertionError("expected duplicate version rejection")
+    finally:
+        store.close()
+
+
 def test_dashboard_plans_message_then_wechat_idempotently(tmp_path):
     store = init_db(tmp_path / "workflow.db")
     try:
@@ -361,14 +377,14 @@ def test_dashboard_http_health_endpoint(tmp_path):
 
         assert response.status == 200
         assert payload["ok"] is True
-        assert payload["data"]["schema_version"] == 4
+        assert payload["data"]["schema_version"] == 5
         assert payload["data"]["queue"]["total"] == 0
     finally:
         server.shutdown()
         server.server_close()
 
 
-def test_dashboard_http_enqueue_requires_explicit_confirmation(tmp_path):
+def test_dashboard_http_has_no_manual_enqueue_endpoint(tmp_path):
     db_path = tmp_path / "workflow.db"
     init_db(db_path).close()
     runtime = DashboardRuntime(db_path)
@@ -382,9 +398,9 @@ def test_dashboard_http_enqueue_requires_explicit_confirmation(tmp_path):
         response = conn.getresponse()
         payload = json.loads(response.read().decode("utf-8"))
 
-        assert response.status == 400
+        assert response.status == 404
         assert payload["ok"] is False
-        assert "confirmation" in payload["error"]["message"]
+        assert payload["error"]["message"] == "Not found"
     finally:
         server.shutdown()
         server.server_close()

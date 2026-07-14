@@ -3,131 +3,97 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>BOSS Operations</title>
+    <title>BOSS Automation Monitor</title>
     <link rel="stylesheet" href="/static/app.css">
   </head>
   <body>
-    <div class="app-shell">
-      <header class="topbar">
-        <div class="brand-block">
-          <h1>BOSS Operations</h1>
-          <p id="dbPath">Local workflow database</p>
+    <header class="topbar">
+      <div>
+        <h1>BOSS Automation</h1>
+        <p id="dbPath">Local workflow database</p>
+      </div>
+      <div class="top-actions">
+        <span id="daemonBadge" class="daemon-badge">Not started</span>
+        <button id="refreshBtn" type="button">Refresh</button>
+        <button id="pauseBtn" class="danger" type="button">Pause</button>
+        <button id="resumeBtn" type="button">Resume</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="metrics" aria-label="Automation status">
+        <div><span>Mode</span><strong id="modeMetric">-</strong></div>
+        <div><span>Last cycle</span><strong id="cycleMetric">-</strong></div>
+        <div><span>Selected</span><strong id="selectedMetric">0</strong></div>
+        <div><span>Review</span><strong id="reviewMetric">0</strong></div>
+        <div><span>Messages sent</span><strong id="sentMetric">0</strong></div>
+        <div><span>WeChat shared</span><strong id="wechatMetric">0</strong></div>
+        <div><span>Queue</span><strong id="queueMetric">0</strong></div>
+        <div><span>Account</span><strong id="accountMetric">-</strong></div>
+      </section>
+
+      <div class="split-layout">
+        <section class="panel template-editor" aria-label="Template editor">
+          <div class="section-title">
+            <h2>New Template Draft</h2>
+            <span>Approval required</span>
+          </div>
+          <div class="form-row">
+            <label>Name<input id="templateName" type="text" placeholder="interest_reply"></label>
+            <label>Version<input id="templateVersion" type="text" placeholder="Automatic"></label>
+          </div>
+          <label>Selection guidance<textarea id="templateGuidance" rows="3" placeholder="Use when the candidate asks for role details"></textarea></label>
+          <label>Exact reply<textarea id="templateBody" rows="5"></textarea></label>
+          <button id="saveDraftBtn" class="primary" type="button">Save Draft</button>
+        </section>
+
+        <section class="panel runtime-panel" aria-label="Daemon runtime">
+          <div class="section-title"><h2>Runtime</h2></div>
+          <dl>
+            <div><dt>Heartbeat</dt><dd id="heartbeatValue">-</dd></div>
+            <div><dt>Next probe</dt><dd id="nextPollValue">-</dd></div>
+            <div><dt>Last run</dt><dd id="lastRunValue">-</dd></div>
+            <div><dt>Last error</dt><dd id="lastErrorValue">-</dd></div>
+            <div><dt>Global state</dt><dd id="pauseValue">-</dd></div>
+          </dl>
+        </section>
+      </div>
+
+      <section class="panel table-panel" aria-label="Approved template catalog">
+        <div class="section-title"><h2>Template Catalog</h2><span id="templateCount">0 templates</span></div>
+        <div class="table-wrap">
+          <table class="template-table">
+            <thead><tr><th>Name / version</th><th>Guidance</th><th>Exact reply</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody id="templateRows"></tbody>
+          </table>
         </div>
-        <div class="top-actions">
-          <span id="runtimeState" class="runtime-state">Idle</span>
-          <button id="refreshBtn" type="button">Refresh</button>
-          <button id="pauseBtn" type="button">Pause</button>
-          <button id="resumeBtn" type="button">Resume</button>
-          <button id="stopBtn" class="danger" type="button">Stop</button>
+      </section>
+
+      <section class="panel table-panel" aria-label="Automation decisions">
+        <div class="section-title"><h2>Recent Decisions</h2><span id="decisionCount">0 decisions</span></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Time</th><th>Candidate</th><th>Job</th><th>Outcome</th><th>Template</th><th>Confidence</th><th>Reason</th></tr></thead>
+            <tbody id="decisionRows"></tbody>
+          </table>
         </div>
-      </header>
+      </section>
 
-      <main class="layout">
-        <section class="status-band" aria-label="System status">
-          <div><span>Account</span><strong id="accountMetric">-</strong></div>
-          <div><span>Candidates</span><strong id="candidateMetric">0</strong></div>
-          <div><span>Queued</span><strong id="queuedMetric">0</strong></div>
-          <div><span>Verified</span><strong id="verifiedMetric">0</strong></div>
-          <div><span>Failed</span><strong id="failedMetric">0</strong></div>
-          <div><span>Paused</span><strong id="pausedMetric">-</strong></div>
-        </section>
+      <section class="panel table-panel" aria-label="Outbound action queue">
+        <div class="section-title"><h2>Outbound Actions</h2><span id="actionCount">0 actions</span></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Created</th><th>Candidate</th><th>Action</th><th>Status</th><th>Template</th><th>Error</th></tr></thead>
+            <tbody id="queueRows"></tbody>
+          </table>
+        </div>
+      </section>
 
-        <section class="workspace sync-workspace" aria-label="Inbox synchronization">
-          <div class="section-title">
-            <h2>Inbox Sync</h2>
-            <button id="syncBtn" class="primary" type="button">Sync</button>
-          </div>
-          <div class="form-grid sync-grid">
-            <label>Candidate limit<input id="syncLimit" type="number" min="1" max="500" value="100"></label>
-            <label>Label ID<input id="syncLabel" type="number" min="0" value="0"></label>
-            <label>Job ID<input id="syncJob" type="text" placeholder="All jobs"></label>
-            <label>History budget<input id="historyBudget" type="number" min="0" max="200" value="20"></label>
-          </div>
-        </section>
-
-        <section class="workspace batch-workspace" aria-label="Batch action composer">
-          <div class="section-title">
-            <h2>Batch Actions</h2>
-            <strong><span id="selectionCount">0</span> selected</strong>
-          </div>
-
-          <fieldset class="action-mode">
-            <legend>Actions</legend>
-            <label><input id="sendMessageAction" type="checkbox" checked> Send message</label>
-            <label><input id="requestWechatAction" type="checkbox"> Request WeChat</label>
-          </fieldset>
-
-          <div id="messageFields" class="message-fields">
-            <div class="template-row">
-              <label>Template name<input id="templateName" type="text" value="dashboard_message"></label>
-              <span>Template <strong id="templateId">none</strong></span>
-            </div>
-            <label>Message<textarea id="messageBody" rows="5" placeholder="Write the exact batch reply"></textarea></label>
-            <button id="saveTemplateBtn" type="button">Approve Message</button>
-          </div>
-
-          <div class="execution-row">
-            <label>Action limit<input id="maxActions" type="number" min="1" max="100" value="10"></label>
-            <label>Delay seconds<input id="delaySeconds" type="number" min="1" max="600" value="60"></label>
-            <button id="enqueueBtn" class="primary" type="button">Queue Selected</button>
-            <button id="startSenderBtn" class="send-button" type="button">Run Queue</button>
-          </div>
-        </section>
-
-        <section class="workspace table-workspace candidates-workspace" aria-label="Inbox review">
-          <div class="section-title table-title">
-            <h2>Candidate Inbox</h2>
-            <div class="table-tools">
-              <input id="candidateFilter" type="search" placeholder="Filter candidates">
-              <button id="selectVisibleBtn" type="button">Select visible</button>
-              <button id="clearSelectionBtn" type="button">Clear</button>
-            </div>
-          </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th class="select-column">Select</th>
-                  <th>Candidate</th>
-                  <th>Job</th>
-                  <th>Stage</th>
-                  <th>Latest message</th>
-                  <th>Last action</th>
-                </tr>
-              </thead>
-              <tbody id="candidateRows"></tbody>
-            </table>
-          </div>
-        </section>
-
-        <section class="workspace table-workspace queue-workspace" aria-label="Outbound queue">
-          <div class="section-title">
-            <h2>Outbound Queue</h2>
-            <span><strong id="messageActionMetric">0</strong> messages / <strong id="wechatActionMetric">0</strong> WeChat</span>
-          </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Status</th>
-                  <th>Action</th>
-                  <th>Candidate</th>
-                  <th>Template</th>
-                  <th>Attempts</th>
-                  <th>Error</th>
-                </tr>
-              </thead>
-              <tbody id="queueRows"></tbody>
-            </table>
-          </div>
-        </section>
-
-        <section class="workspace events-workspace" aria-label="Audit events">
-          <div class="section-title"><h2>Audit Events</h2></div>
-          <ol id="eventRows"></ol>
-        </section>
-      </main>
-    </div>
+      <section class="panel audit-panel" aria-label="Audit log">
+        <div class="section-title"><h2>Audit Log</h2></div>
+        <ol id="eventRows"></ol>
+      </section>
+    </main>
     <div id="toast" role="status" aria-live="polite"></div>
     <script src="/static/app.js"></script>
   </body>
