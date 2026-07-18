@@ -1,6 +1,9 @@
 """Cross-platform path and API identity tests."""
 
+import sys
 from pathlib import Path
+
+import pytest
 
 from boss_cli.platform import build_api_headers, camoufox_os_name, get_app_paths
 
@@ -12,12 +15,13 @@ def test_windows_paths_use_local_app_data_with_spaces_and_unicode():
         home=Path(r"C:\Users\ignored"),
     )
 
-    assert str(paths.workflow_db).endswith("BossCLI/data/workflow.db")
-    assert str(paths.secrets_file).endswith("BossCLI/secrets/secrets.dpapi")
-    assert str(paths.deployment_config).endswith("BossCLI/config/deployment.json")
+    assert paths.workflow_db.parts[-3:] == ("BossCLI", "data", "workflow.db")
+    assert paths.secrets_file.parts[-3:] == ("BossCLI", "secrets", "secrets.dpapi")
+    assert paths.deployment_config.parts[-3:] == ("BossCLI", "config", "deployment.json")
     assert paths.index_cache_file.parent == paths.data_dir
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Linux path semantics require a POSIX host")
 def test_macos_and_linux_existing_config_and_data_defaults_are_preserved():
     home = Path("/Users/example")
     mac = get_app_paths(system="Darwin", environ={}, home=home)
@@ -29,6 +33,7 @@ def test_macos_and_linux_existing_config_and_data_defaults_are_preserved():
     assert linux.index_cache_file == Path("/home/example/.config/boss-cli/index_cache.json")
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Linux path semantics require a POSIX host")
 def test_linux_honors_xdg_config_data_and_state_homes():
     paths = get_app_paths(
         system="Linux",
@@ -46,6 +51,7 @@ def test_linux_honors_xdg_config_data_and_state_homes():
     assert paths.linux is True
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Linux path semantics require a POSIX host")
 def test_linux_ignores_relative_xdg_homes():
     home = Path("/home/example")
     paths = get_app_paths(

@@ -38,7 +38,8 @@ def test_required_linux_scripts_are_strict_and_do_not_use_sudo():
         assert text.startswith("#!/usr/bin/env bash")
         assert "set -Eeuo pipefail" in text
         assert "sudo " not in text
-        subprocess.run(["bash", "-n", str(path)], check=True)
+        if sys.platform != "win32":
+            subprocess.run(["bash", "-n", str(path)], check=True)
 
 
 def test_linux_scripts_never_accept_secret_values_as_arguments():
@@ -76,6 +77,7 @@ def test_systemd_units_are_user_scoped_hardened_and_interactive():
     assert "OnCalendar=" in timer
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="systemd rendering requires POSIX path semantics")
 def test_systemd_renderer_quotes_spaces_percent_and_unicode(tmp_path):
     module_path = SCRIPTS / "render-systemd-units.py"
     spec = importlib.util.spec_from_file_location("boss_linux_systemd_renderer", module_path)
