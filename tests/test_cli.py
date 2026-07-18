@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -11,6 +12,11 @@ from click.testing import CliRunner
 from boss_cli.cli import cli
 
 runner = CliRunner()
+
+
+def _strip_ansi(value: str) -> str:
+    """Make Rich output assertions independent of terminal color detection."""
+    return re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", value)
 
 
 # ── CLI Basics ──────────────────────────────────────────────────────
@@ -32,10 +38,22 @@ class TestCliBasic:
     def test_all_commands_registered(self):
         result = runner.invoke(cli, ["--help"])
         expected = [
-            "login", "status", "logout", "me",
-            "search", "recommend", "cities", "detail", "show", "export", "history",
-            "applied", "interviews",
-            "chat", "greet", "batch-greet",
+            "login",
+            "status",
+            "logout",
+            "me",
+            "search",
+            "recommend",
+            "cities",
+            "detail",
+            "show",
+            "export",
+            "history",
+            "applied",
+            "interviews",
+            "chat",
+            "greet",
+            "batch-greet",
         ]
         for cmd in expected:
             assert cmd in result.output, f"Command '{cmd}' not found in CLI help"
@@ -44,12 +62,27 @@ class TestCliBasic:
 class TestCommandHelp:
     """Verify every command has --help without errors."""
 
-    @pytest.mark.parametrize("cmd", [
-        "login", "logout", "status", "me",
-        "search", "recommend", "cities", "detail", "show", "export", "history",
-        "applied", "interviews",
-        "chat", "greet", "batch-greet",
-    ])
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "login",
+            "logout",
+            "status",
+            "me",
+            "search",
+            "recommend",
+            "cities",
+            "detail",
+            "show",
+            "export",
+            "history",
+            "applied",
+            "interviews",
+            "chat",
+            "greet",
+            "batch-greet",
+        ],
+    )
     def test_help(self, cmd: str):
         result = runner.invoke(cli, [cmd, "--help"])
         assert result.exit_code == 0, f"{cmd} --help failed: {result.output}"
@@ -116,12 +149,17 @@ class TestAuthCommands:
     def test_status_with_auth(self):
         mock_cred = MagicMock()
         mock_cred.cookies = {"__zp_stoken__": "s", "wt2": "1", "wbg": "2", "zp_at": "3"}
-        with patch("boss_cli.auth.get_credential", return_value=mock_cred), \
-             patch("boss_cli.auth.verify_credential_details", return_value={
-                 "authenticated": True,
-                 "search_authenticated": True,
-                 "recommend_authenticated": True,
-             }):
+        with (
+            patch("boss_cli.auth.get_credential", return_value=mock_cred),
+            patch(
+                "boss_cli.auth.verify_credential_details",
+                return_value={
+                    "authenticated": True,
+                    "search_authenticated": True,
+                    "recommend_authenticated": True,
+                },
+            ),
+        ):
             result = runner.invoke(cli, ["status"])
             assert result.exit_code == 0
             assert "已登录" in result.output
@@ -129,12 +167,17 @@ class TestAuthCommands:
     def test_status_json(self):
         mock_cred = MagicMock()
         mock_cred.cookies = {"__zp_stoken__": "s", "wt2": "1", "wbg": "2", "zp_at": "3"}
-        with patch("boss_cli.auth.get_credential", return_value=mock_cred), \
-             patch("boss_cli.auth.verify_credential_details", return_value={
-                 "authenticated": True,
-                 "search_authenticated": True,
-                 "recommend_authenticated": True,
-             }):
+        with (
+            patch("boss_cli.auth.get_credential", return_value=mock_cred),
+            patch(
+                "boss_cli.auth.verify_credential_details",
+                return_value={
+                    "authenticated": True,
+                    "search_authenticated": True,
+                    "recommend_authenticated": True,
+                },
+            ),
+        ):
             result = runner.invoke(cli, ["status", "--json"])
             assert result.exit_code == 0
             data = json.loads(result.output)
@@ -146,13 +189,18 @@ class TestAuthCommands:
     def test_status_with_invalid_saved_auth(self):
         mock_cred = MagicMock()
         mock_cred.cookies = {"wt2": "1", "wbg": "2", "zp_at": "3"}
-        with patch("boss_cli.auth.get_credential", return_value=mock_cred), \
-             patch("boss_cli.auth.verify_credential_details", return_value={
-                 "authenticated": False,
-                 "search_authenticated": False,
-                 "recommend_authenticated": False,
-                 "reason": "缺少关键 Cookie: __zp_stoken__",
-             }):
+        with (
+            patch("boss_cli.auth.get_credential", return_value=mock_cred),
+            patch(
+                "boss_cli.auth.verify_credential_details",
+                return_value={
+                    "authenticated": False,
+                    "search_authenticated": False,
+                    "recommend_authenticated": False,
+                    "reason": "缺少关键 Cookie: __zp_stoken__",
+                },
+            ),
+        ):
             result = runner.invoke(cli, ["status", "--json"])
             assert result.exit_code == 0
             data = json.loads(result.output)
@@ -163,13 +211,18 @@ class TestAuthCommands:
     def test_status_with_partial_health(self):
         mock_cred = MagicMock()
         mock_cred.cookies = {"__zp_stoken__": "s", "wt2": "1", "wbg": "2", "zp_at": "3"}
-        with patch("boss_cli.auth.get_credential", return_value=mock_cred), \
-             patch("boss_cli.auth.verify_credential_details", return_value={
-                 "authenticated": True,
-                 "search_authenticated": True,
-                 "recommend_authenticated": False,
-                 "reason": "recommend: 环境异常 (__zp_stoken__ 已过期)。请重新登录: boss logout && boss login",
-             }):
+        with (
+            patch("boss_cli.auth.get_credential", return_value=mock_cred),
+            patch(
+                "boss_cli.auth.verify_credential_details",
+                return_value={
+                    "authenticated": True,
+                    "search_authenticated": True,
+                    "recommend_authenticated": False,
+                    "reason": "recommend: 环境异常 (__zp_stoken__ 已过期)。请重新登录: boss logout && boss login",
+                },
+            ),
+        ):
             result = runner.invoke(cli, ["status", "--json"])
             assert result.exit_code == 0
             data = json.loads(result.output)
@@ -201,12 +254,17 @@ class TestPersonalCommands:
         mock_cred.cookies = {"wt2": "x"}
 
         mock_data = {
-            "name": "张三", "gender": 1, "age": "25岁",
-            "degreeCategory": "本科", "account": "138****1234",
+            "name": "张三",
+            "gender": 1,
+            "age": "25岁",
+            "degreeCategory": "本科",
+            "account": "138****1234",
         }
 
-        with patch("boss_cli.commands._common.get_credential", return_value=mock_cred), \
-             patch("boss_cli.commands._common.BossClient") as MockClient:
+        with (
+            patch("boss_cli.commands._common.get_credential", return_value=mock_cred),
+            patch("boss_cli.commands._common.BossClient") as MockClient,
+        ):
             mock_instance = MagicMock()
             mock_instance.get_resume_baseinfo.return_value = mock_data
             mock_instance.__enter__ = MagicMock(return_value=mock_instance)
@@ -224,8 +282,10 @@ class TestPersonalCommands:
 
         mock_data = {"name": "张三", "gender": 1, "age": "25岁"}
 
-        with patch("boss_cli.commands._common.get_credential", return_value=mock_cred), \
-             patch("boss_cli.commands._common.BossClient") as MockClient:
+        with (
+            patch("boss_cli.commands._common.get_credential", return_value=mock_cred),
+            patch("boss_cli.commands._common.BossClient") as MockClient,
+        ):
             mock_instance = MagicMock()
             mock_instance.get_resume_baseinfo.return_value = mock_data
             mock_instance.__enter__ = MagicMock(return_value=mock_instance)
@@ -272,20 +332,24 @@ class TestCityResolution:
 
     def test_resolve_known_city(self):
         from boss_cli.client import resolve_city
+
         assert resolve_city("北京") == "101010100"
         assert resolve_city("上海") == "101020100"
         assert resolve_city("杭州") == "101210100"
 
     def test_resolve_unknown_city_returns_nationwide(self):
         from boss_cli.client import resolve_city
+
         assert resolve_city("不存在的城市") == "100010000"
 
     def test_resolve_code_passthrough(self):
         from boss_cli.client import resolve_city
+
         assert resolve_city("101010100") == "101010100"
 
     def test_list_cities(self):
         from boss_cli.client import list_cities
+
         cities = list_cities()
         assert len(cities) > 30
         assert "北京" in cities
@@ -300,21 +364,25 @@ class TestConstants:
 
     def test_salary_codes(self):
         from boss_cli.constants import SALARY_CODES
+
         assert len(SALARY_CODES) >= 8
         assert "20-30K" in SALARY_CODES
 
     def test_exp_codes(self):
         from boss_cli.constants import EXP_CODES
+
         assert len(EXP_CODES) >= 7
         assert "3-5年" in EXP_CODES
 
     def test_degree_codes(self):
         from boss_cli.constants import DEGREE_CODES
+
         assert len(DEGREE_CODES) >= 5
         assert "本科" in DEGREE_CODES
 
     def test_api_urls_defined(self):
         from boss_cli import constants
+
         assert constants.JOB_SEARCH_URL
         assert constants.JOB_DETAIL_URL
         assert constants.DELIVER_LIST_URL
@@ -332,6 +400,7 @@ class TestCredential:
 
     def test_credential_creation(self):
         from boss_cli.auth import Credential
+
         cred = Credential(cookies={"foo": "bar", "baz": "qux"})
         assert cred.is_valid
         assert cred.cookies == {"foo": "bar", "baz": "qux"}
@@ -340,11 +409,13 @@ class TestCredential:
 
     def test_credential_empty(self):
         from boss_cli.auth import Credential
+
         cred = Credential(cookies={})
         assert not cred.is_valid
 
     def test_credential_serialization(self):
         from boss_cli.auth import Credential
+
         cred = Credential(cookies={"a": "1"})
         data = cred.to_dict()
         assert "cookies" in data
@@ -355,6 +426,7 @@ class TestCredential:
 
     def test_cookie_header(self):
         from boss_cli.auth import Credential
+
         cred = Credential(cookies={"a": "1", "b": "2"})
         header = cred.as_cookie_header()
         assert "a=1" in header
@@ -369,6 +441,7 @@ class TestExceptions:
 
     def test_boss_api_error(self):
         from boss_cli.exceptions import BossApiError
+
         err = BossApiError("test error", code=42, response={"a": 1})
         assert err.code == 42
         assert err.response == {"a": 1}
@@ -376,22 +449,26 @@ class TestExceptions:
 
     def test_session_expired_error(self):
         from boss_cli.exceptions import SessionExpiredError
+
         err = SessionExpiredError()
         assert err.code == 37
         assert "stoken" in str(err)
 
     def test_auth_required_error(self):
         from boss_cli.exceptions import AuthRequiredError
+
         err = AuthRequiredError()
         assert "登录" in str(err)
 
     def test_rate_limit_error(self):
         from boss_cli.exceptions import RateLimitError
+
         err = RateLimitError()
         assert "频繁" in str(err)
 
     def test_param_error(self):
         from boss_cli.exceptions import ParamError
+
         err = ParamError("missing field", code=17)
         assert err.code == 17
 
@@ -403,6 +480,7 @@ class TestExceptions:
             SessionExpiredError,
             error_code_for_exception,
         )
+
         assert error_code_for_exception(SessionExpiredError()) == "not_authenticated"
         assert error_code_for_exception(AuthRequiredError()) == "not_authenticated"
         assert error_code_for_exception(RateLimitError()) == "rate_limited"
@@ -427,6 +505,7 @@ class TestClient:
 
     def test_client_not_initialized_error(self):
         from boss_cli.client import BossClient
+
         client = BossClient()
         with pytest.raises(RuntimeError, match="Client not initialized"):
             _ = client.client
@@ -485,6 +564,16 @@ class TestClient:
             data = {"code": 999, "message": "unknown"}
             with pytest.raises(BossApiError):
                 client._handle_response(data, "test")
+
+    def test_list_endpoint_rejects_unexpected_response_shape(self, monkeypatch):
+        from boss_cli.client import BossClient
+        from boss_cli.exceptions import BossApiError
+
+        client = BossClient()
+        monkeypatch.setattr(client, "_get", lambda *args, **kwargs: {"jobList": []})
+        with pytest.raises(BossApiError) as exc_info:
+            client.get_boss_chatted_jobs()
+        assert exc_info.value.code == "invalid_response"
 
     def test_search_request_uses_search_referer(self):
         from boss_cli.auth import Credential
@@ -672,6 +761,7 @@ class TestIndexCache:
 
     def test_save_and_get(self, tmp_path, monkeypatch):
         from boss_cli import index_cache
+
         monkeypatch.setattr(index_cache, "INDEX_CACHE_FILE", tmp_path / "index_cache.json")
         monkeypatch.setattr(index_cache, "CONFIG_DIR", tmp_path)
 
@@ -692,6 +782,7 @@ class TestIndexCache:
 
     def test_get_out_of_range(self, tmp_path, monkeypatch):
         from boss_cli import index_cache
+
         monkeypatch.setattr(index_cache, "INDEX_CACHE_FILE", tmp_path / "index_cache.json")
         monkeypatch.setattr(index_cache, "CONFIG_DIR", tmp_path)
 
@@ -701,11 +792,13 @@ class TestIndexCache:
 
     def test_get_no_cache(self, tmp_path, monkeypatch):
         from boss_cli import index_cache
+
         monkeypatch.setattr(index_cache, "INDEX_CACHE_FILE", tmp_path / "nonexistent.json")
         assert index_cache.get_job_by_index(1) is None
 
     def test_get_index_info(self, tmp_path, monkeypatch):
         from boss_cli import index_cache
+
         monkeypatch.setattr(index_cache, "INDEX_CACHE_FILE", tmp_path / "index_cache.json")
         monkeypatch.setattr(index_cache, "CONFIG_DIR", tmp_path)
 
@@ -720,6 +813,7 @@ class TestIndexCache:
 
     def test_zero_and_negative_index(self, tmp_path, monkeypatch):
         from boss_cli import index_cache
+
         monkeypatch.setattr(index_cache, "INDEX_CACHE_FILE", tmp_path / "index_cache.json")
         assert index_cache.get_job_by_index(0) is None
         assert index_cache.get_job_by_index(-1) is None
@@ -733,6 +827,7 @@ class TestShowCommand:
 
     def test_show_no_cache(self, tmp_path, monkeypatch):
         from boss_cli import index_cache
+
         monkeypatch.setattr(index_cache, "INDEX_CACHE_FILE", tmp_path / "nonexistent.json")
         result = runner.invoke(cli, ["show", "1"])
         assert result.exit_code == 0
@@ -740,6 +835,7 @@ class TestShowCommand:
 
     def test_show_out_of_range(self, tmp_path, monkeypatch):
         from boss_cli import index_cache
+
         monkeypatch.setattr(index_cache, "INDEX_CACHE_FILE", tmp_path / "index_cache.json")
         monkeypatch.setattr(index_cache, "CONFIG_DIR", tmp_path)
         index_cache.save_index([{"securityId": "x", "jobName": "T"}])
@@ -790,8 +886,10 @@ class TestSearchMock:
 
         mock_data = {"jobList": [{"jobName": "Go Dev", "securityId": "abc"}], "hasMore": False}
 
-        with patch("boss_cli.commands._common.get_credential", return_value=mock_cred), \
-             patch("boss_cli.commands._common.BossClient") as MockClient:
+        with (
+            patch("boss_cli.commands._common.get_credential", return_value=mock_cred),
+            patch("boss_cli.commands._common.BossClient") as MockClient,
+        ):
             mock_instance = MagicMock()
             mock_instance.search_jobs.return_value = mock_data
             mock_instance.__enter__ = MagicMock(return_value=mock_instance)
@@ -818,21 +916,32 @@ class TestSearchMock:
 
         mock_data = {"jobList": [{"jobName": "Eng", "securityId": "x"}], "hasMore": False}
 
-        with patch("boss_cli.commands._common.get_credential", return_value=mock_cred), \
-             patch("boss_cli.commands._common.BossClient") as MockClient:
+        with (
+            patch("boss_cli.commands._common.get_credential", return_value=mock_cred),
+            patch("boss_cli.commands._common.BossClient") as MockClient,
+        ):
             mock_instance = MagicMock()
             mock_instance.search_jobs.return_value = mock_data
             mock_instance.__enter__ = MagicMock(return_value=mock_instance)
             mock_instance.__exit__ = MagicMock(return_value=False)
             MockClient.return_value = mock_instance
 
-            result = runner.invoke(cli, [
-                "search", "Python", "--json",
-                "--industry", "互联网",
-                "--scale", "1000-9999人",
-                "--stage", "已上市",
-                "--job-type", "全职",
-            ])
+            result = runner.invoke(
+                cli,
+                [
+                    "search",
+                    "Python",
+                    "--json",
+                    "--industry",
+                    "互联网",
+                    "--scale",
+                    "1000-9999人",
+                    "--stage",
+                    "已上市",
+                    "--job-type",
+                    "全职",
+                ],
+            )
             assert result.exit_code == 0
             # Verify the call was made with the new params
             call_kwargs = mock_instance.search_jobs.call_args
@@ -857,23 +966,27 @@ class TestNewConstants:
 
     def test_industry_codes_present(self):
         from boss_cli.constants import INDUSTRY_CODES
+
         assert len(INDUSTRY_CODES) >= 10
         assert "互联网" in INDUSTRY_CODES
         assert "人工智能" in INDUSTRY_CODES
 
     def test_scale_codes_present(self):
         from boss_cli.constants import SCALE_CODES
+
         assert len(SCALE_CODES) >= 6
         assert "1000-9999人" in SCALE_CODES
 
     def test_stage_codes_present(self):
         from boss_cli.constants import STAGE_CODES
+
         assert len(STAGE_CODES) >= 8
         assert "已上市" in STAGE_CODES
         assert "A轮" in STAGE_CODES
 
     def test_job_type_codes_present(self):
         from boss_cli.constants import JOB_TYPE_CODES
+
         assert len(JOB_TYPE_CODES) >= 3
         assert "全职" in JOB_TYPE_CODES
 
@@ -885,12 +998,17 @@ class TestSchemaEnvelope:
         """status uses direct output, not envelope (for backward compat)."""
         mock_cred = MagicMock()
         mock_cred.cookies = {"__zp_stoken__": "s", "wt2": "1", "wbg": "2", "zp_at": "3"}
-        with patch("boss_cli.auth.get_credential", return_value=mock_cred), \
-             patch("boss_cli.auth.verify_credential_details", return_value={
-                 "authenticated": True,
-                 "search_authenticated": True,
-                 "recommend_authenticated": True,
-             }):
+        with (
+            patch("boss_cli.auth.get_credential", return_value=mock_cred),
+            patch(
+                "boss_cli.auth.verify_credential_details",
+                return_value={
+                    "authenticated": True,
+                    "search_authenticated": True,
+                    "recommend_authenticated": True,
+                },
+            ),
+        ):
             result = runner.invoke(cli, ["status", "--json"])
             assert result.exit_code == 0
             data = json.loads(result.output)
@@ -903,8 +1021,10 @@ class TestSchemaEnvelope:
 
         mock_data = {"name": "张三", "gender": 1}
 
-        with patch("boss_cli.commands._common.get_credential", return_value=mock_cred), \
-             patch("boss_cli.commands._common.BossClient") as MockClient:
+        with (
+            patch("boss_cli.commands._common.get_credential", return_value=mock_cred),
+            patch("boss_cli.commands._common.BossClient") as MockClient,
+        ):
             mock_instance = MagicMock()
             mock_instance.get_resume_baseinfo.return_value = mock_data
             mock_instance.__enter__ = MagicMock(return_value=mock_instance)
@@ -928,10 +1048,12 @@ class TestCommandFailures:
         mock_cred = MagicMock()
         mock_cred.cookies = {"__zp_stoken__": "s", "wt2": "1", "wbg": "2", "zp_at": "3"}
 
-        with patch("boss_cli.commands._common.get_credential", return_value=mock_cred), \
-             patch("boss_cli.commands._common.BossClient") as MockClient, \
-             patch("boss_cli.auth.extract_browser_credential", return_value=(None, [])), \
-             patch("boss_cli.auth.clear_credential") as clear_credential:
+        with (
+            patch("boss_cli.commands._common.get_credential", return_value=mock_cred),
+            patch("boss_cli.commands._common.BossClient") as MockClient,
+            patch("boss_cli.auth.extract_browser_credential", return_value=(None, [])),
+            patch("boss_cli.auth.clear_credential") as clear_credential,
+        ):
             mock_instance = MagicMock()
             mock_instance.search_jobs.side_effect = SessionExpiredError()
             mock_instance.__enter__ = MagicMock(return_value=mock_instance)
@@ -951,8 +1073,10 @@ class TestCommandFailures:
         mock_cred = MagicMock()
         mock_cred.cookies = {"__zp_stoken__": "s", "wt2": "1", "wbg": "2", "zp_at": "3"}
 
-        with patch("boss_cli.commands._common.get_credential", return_value=mock_cred), \
-             patch("boss_cli.commands.search.run_client_action", side_effect=BossApiError("boom")):
+        with (
+            patch("boss_cli.commands._common.get_credential", return_value=mock_cred),
+            patch("boss_cli.commands.search.run_client_action", side_effect=BossApiError("boom")),
+        ):
             result = runner.invoke(cli, ["export", "Python"])
             assert result.exit_code == 1
             assert "导出失败" in result.output
@@ -963,8 +1087,10 @@ class TestCommandFailures:
         mock_cred = MagicMock()
         mock_cred.cookies = {"__zp_stoken__": "s", "wt2": "1", "wbg": "2", "zp_at": "3"}
 
-        with patch("boss_cli.commands._common.get_credential", return_value=mock_cred), \
-             patch("boss_cli.commands._common.BossClient") as MockClient:
+        with (
+            patch("boss_cli.commands._common.get_credential", return_value=mock_cred),
+            patch("boss_cli.commands._common.BossClient") as MockClient,
+        ):
             mock_instance = MagicMock()
             mock_instance.search_jobs.side_effect = BossApiError("boom")
             mock_instance.__enter__ = MagicMock(return_value=mock_instance)
@@ -996,11 +1122,13 @@ class TestCommandFailures:
         refreshed_client.__exit__ = MagicMock(return_value=False)
         refreshed_client.add_friend.return_value = {"success": True}
 
-        with patch("boss_cli.commands._common.get_credential", return_value=mock_cred), \
-             patch("boss_cli.commands._common.BossClient", side_effect=[initial_client, initial_client, refreshed_client]), \
-             patch("boss_cli.auth.extract_browser_credential", return_value=(fresh_cred, [])), \
-             patch("boss_cli.auth.clear_credential") as clear_credential:
+        with (
+            patch("boss_cli.commands._common.get_credential", return_value=mock_cred),
+            patch("boss_cli.commands._common.BossClient", side_effect=[initial_client, initial_client, refreshed_client]),
+            patch("boss_cli.auth.extract_browser_credential", return_value=(fresh_cred, [])),
+            patch("boss_cli.auth.clear_credential") as clear_credential,
+        ):
             result = runner.invoke(cli, ["batch-greet", "Python", "-n", "1", "-y"])
             assert result.exit_code == 0
-            assert "1/1" in result.output
+            assert "1/1" in _strip_ansi(result.output)
             clear_credential.assert_not_called()

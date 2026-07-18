@@ -191,9 +191,7 @@ def sync_inbox(
 
             last_by_uid = index_last_messages(last_messages)
             details_by_friend = {
-                int(item.get("friendId") or item.get("uid") or 0): item
-                for item in details
-                if item.get("friendId") or item.get("uid")
+                int(item.get("friendId") or item.get("uid") or 0): item for item in details if item.get("friendId") or item.get("uid")
             }
             page_entries: list[dict[str, Any]] = []
             for friend_row in friend_rows:
@@ -225,11 +223,7 @@ def sync_inbox(
                         candidate_uid=uid,
                         recruiter_user_id=recruiter_user_id,
                     )
-                    normalized_latest = (
-                        normalize_message(last_message, direction=direction, source="latest")
-                        if last_message
-                        else None
-                    )
+                    normalized_latest = normalize_message(last_message, direction=direction, source="latest") if last_message else None
                     previous = store.get_candidate_by_external_key(
                         account_id=account_id,
                         friend_id=friend_id,
@@ -351,13 +345,7 @@ def sync_inbox(
             )
         summary["complete_scan"] = scan_complete
 
-        safe_full_scan = (
-            options.full_scan
-            and scan_complete
-            and not options.enc_job_id
-            and options.label_id == 0
-            and not summary["resumed"]
-        )
+        safe_full_scan = options.full_scan and scan_complete and not options.enc_job_id and options.label_id == 0 and not summary["resumed"]
         if safe_full_scan:
             summary["inactive_candidates"] = store.mark_unseen_candidates_inactive(
                 account_id=account_id,
@@ -630,4 +618,4 @@ def _int_or_none(value: Any) -> int | None:
 
 
 def _chunks(values: list[int], size: int) -> list[list[int]]:
-    return [values[index:index + size] for index in range(0, len(values), size)]
+    return [values[index : index + size] for index in range(0, len(values), size)]

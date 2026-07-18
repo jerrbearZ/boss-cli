@@ -141,11 +141,14 @@ class FakeReadClient:
 
 def test_identity_direction_and_timestamp_normalization():
     assert extract_recruiter_user_id_from_user_info({"userInfo": {"userId": "900"}}) == 900
-    assert message_direction(
-        {"lastMsgInfo": {"fromId": 501, "toId": 900}},
-        candidate_uid=501,
-        recruiter_user_id=900,
-    ) == "inbound"
+    assert (
+        message_direction(
+            {"lastMsgInfo": {"fromId": 501, "toId": 900}},
+            candidate_uid=501,
+            recruiter_user_id=900,
+        )
+        == "inbound"
+    )
     assert extract_message_time({"msgTime": 1783917600000}) == "2026-07-13T04:40:00Z"
 
     history = normalize_history_message(
@@ -189,10 +192,7 @@ def test_history_budget_marks_remaining_conversations_deferred(tmp_path):
     store = init_db(tmp_path / "workflow.db")
     try:
         result = sync_inbox(store, client, Credential({"wt2": "cookie"}), history_budget=1)
-        statuses = {
-            row["history_sync_status"]
-            for row in store.conn.execute("SELECT history_sync_status FROM candidates").fetchall()
-        }
+        statuses = {row["history_sync_status"] for row in store.conn.execute("SELECT history_sync_status FROM candidates").fetchall()}
 
         assert result["history_conversations"] == 1
         assert result["history_deferred"] == 2
@@ -208,8 +208,7 @@ def test_deferred_history_is_drained_on_later_runs(tmp_path):
         first = sync_inbox(store, client, Credential({"wt2": "cookie"}), history_budget=1)
         second = sync_inbox(store, client, Credential({"wt2": "cookie"}), history_budget=1)
         statuses = [
-            row["history_sync_status"]
-            for row in store.conn.execute("SELECT history_sync_status FROM candidates ORDER BY id").fetchall()
+            row["history_sync_status"] for row in store.conn.execute("SELECT history_sync_status FROM candidates ORDER BY id").fetchall()
         ]
 
         assert first["history_deferred"] == 2
@@ -264,9 +263,7 @@ def test_complete_full_scan_marks_missing_candidate_inactive(tmp_path):
         client.pages = {1: {"result": [{"friendId": 101}], "hasMore": False}}
         result = sync_inbox(store, client, Credential({"wt2": "cookie"}), history_mode="none", full_scan=True)
 
-        inactive = store.conn.execute(
-            "SELECT COUNT(*) AS count FROM candidates WHERE inactive_at IS NOT NULL"
-        ).fetchone()
+        inactive = store.conn.execute("SELECT COUNT(*) AS count FROM candidates WHERE inactive_at IS NOT NULL").fetchone()
 
         assert result["inactive_candidates"] == 2
         assert inactive["count"] == 2

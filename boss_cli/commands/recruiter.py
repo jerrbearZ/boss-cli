@@ -14,6 +14,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from ..browser_reply import (
+    BrowserEngine,
     BrowserReplyError,
     make_dry_run_result,
     resolve_browser_reply_target,
@@ -74,8 +75,11 @@ def recruiter_jobs(as_json: bool, as_yaml: bool) -> None:
         console.print("  [dim]使用 boss recruiter inbox --job <encJobId> 查看该职位的候选人[/dim]")
 
     handle_command(
-        cred, action=lambda c: c.get_boss_chatted_jobs(),
-        render=_render, as_json=as_json, as_yaml=as_yaml,
+        cred,
+        action=lambda c: c.get_boss_chatted_jobs(),
+        render=_render,
+        as_json=as_json,
+        as_yaml=as_yaml,
     )
 
 
@@ -92,9 +96,15 @@ def recruiter_jobs(as_json: bool, as_yaml: bool) -> None:
 @click.option("-p", "--page", default=1, type=int, help="页码")
 @structured_output_options
 def recruiter_search(
-    keyword: str, city: str, exp: str | None, degree: str | None,
-    salary: str | None, encrypt_job_id: str, page: int,
-    as_json: bool, as_yaml: bool,
+    keyword: str,
+    city: str,
+    exp: str | None,
+    degree: str | None,
+    salary: str | None,
+    encrypt_job_id: str,
+    page: int,
+    as_json: bool,
+    as_yaml: bool,
 ) -> None:
     """搜索候选人 (Search candidates)"""
     cred = require_auth()
@@ -105,9 +115,13 @@ def recruiter_search(
 
     def _action(c: BossClient) -> dict:
         return c.search_geeks(
-            query=keyword, city=city_code, page=page,
-            experience=exp_code, degree=degree_code,
-            salary=salary_code, encrypt_job_id=encrypt_job_id,
+            query=keyword,
+            city=city_code,
+            page=page,
+            experience=exp_code,
+            degree=degree_code,
+            salary=salary_code,
+            encrypt_job_id=encrypt_job_id,
         )
 
     def _render(data: dict) -> None:
@@ -150,8 +164,11 @@ def recruiter_search(
 @click.option("--job", "enc_job_id", default="", help="关联职位 encryptJobId (切换岗位)")
 @structured_output_options
 def recruiter_recommend(
-    display_limit: int, page: int, enc_job_id: str,
-    as_json: bool, as_yaml: bool,
+    display_limit: int,
+    page: int,
+    enc_job_id: str,
+    as_json: bool,
+    as_yaml: bool,
 ) -> None:
     """推荐候选人列表 (支持 --job 切换岗位, -p 翻页)"""
     cred = require_auth()
@@ -254,9 +271,15 @@ def recruiter_greet(encrypt_geek_id: str, encrypt_job_id: str, as_json: bool, as
 @click.option("--dry-run", is_flag=True, help="仅预览, 不实际查看")
 @click.option("-y", "--yes", is_flag=True, help="跳过确认提示")
 def recruiter_batch_view(
-    keyword: str, city: str, count: int,
-    salary: str | None, exp: str | None, degree: str | None,
-    encrypt_job_id: str, dry_run: bool, yes: bool,
+    keyword: str,
+    city: str,
+    count: int,
+    salary: str | None,
+    exp: str | None,
+    degree: str | None,
+    encrypt_job_id: str,
+    dry_run: bool,
+    yes: bool,
 ) -> None:
     """批量查看搜索结果中的候选人简历 (触发 "被查看" 通知)
 
@@ -276,9 +299,12 @@ def recruiter_batch_view(
         data = run_client_action(
             cred,
             lambda client: client.search_geeks(
-                query=keyword, city=city_code,
-                experience=exp_code, degree=degree_code,
-                salary=salary_code, encrypt_job_id=encrypt_job_id,
+                query=keyword,
+                city=city_code,
+                experience=exp_code,
+                degree=degree_code,
+                salary=salary_code,
+                encrypt_job_id=encrypt_job_id,
             ),
         )
 
@@ -464,8 +490,13 @@ def recruiter_reply(friend_id: int, message: str, yes: bool, as_json: bool, as_y
 @recruiter.command("reply-browser")
 @click.argument("friend_id", type=int)
 @click.argument("message")
-@click.option("--engine", type=click.Choice(["auto", "camoufox", "chrome"]), default="auto", show_default=True,
-              help="浏览器发送引擎；auto 会先尝试 camoufox，再尝试 Chrome")
+@click.option(
+    "--engine",
+    type=click.Choice(["auto", "camoufox", "chrome"]),
+    default="auto",
+    show_default=True,
+    help="浏览器发送引擎；auto 会先尝试 camoufox，再尝试 Chrome",
+)
 @click.option("--headless", is_flag=True, help="无头模式运行浏览器；默认打开可见浏览器便于处理登录/风控提示")
 @click.option("--timeout", "timeout_s", default=45, type=int, show_default=True, help="等待 Boss Web 初始化的秒数")
 @click.option("--verify-timeout", default=20, type=int, show_default=True, help="发送后等待最新消息验证的秒数")
@@ -475,7 +506,7 @@ def recruiter_reply(friend_id: int, message: str, yes: bool, as_json: bool, as_y
 def recruiter_reply_browser(
     friend_id: int,
     message: str,
-    engine: str,
+    engine: BrowserEngine,
     headless: bool,
     timeout_s: int,
     verify_timeout: int,
@@ -520,7 +551,7 @@ def recruiter_reply_browser(
     except BossApiError as exc:
         _print_error(exc, as_json=as_json, as_yaml=as_yaml)
         if isinstance(exc, BrowserReplyError) and not (as_json or as_yaml or not sys.stdout.isatty()):
-            console.print("[dim]建议: 优先安装/准备 camoufox: uv run python -m camoufox fetch[/dim]")
+            console.print("[dim]建议: 准备固定版本 Camoufox: uv run python -m boss_cli.camoufox_runtime install --smoke[/dim]")
         raise SystemExit(1) from None
 
 
@@ -559,6 +590,7 @@ def recruiter_export(enc_job_id: str, output_file: str | None, fmt: str) -> None
     cred = require_auth()
 
     try:
+
         def _collect(c: BossClient) -> list[dict]:
             friend_data = c.get_boss_friend_list(enc_job_id=enc_job_id)
             friend_list = friend_data.get("result", [])
@@ -585,15 +617,21 @@ def recruiter_export(enc_job_id: str, output_file: str | None, fmt: str) -> None
             writer.writeheader()
             for f in all_candidates:
                 source_map = {1: "搜索", 2: "推荐", 3: "打招呼", 5: "主动沟通"}
-                writer.writerow({
-                    "姓名": f.get("name", ""),
-                    "关联职位": f.get("jobName", ""),
-                    "来源": source_map.get(f.get("sourceType"), str(f.get("sourceType", ""))),
-                    "最近时间": f.get("lastTime", ""),
-                    "新牛人": "是" if f.get("newGeek") else "",
-                    "encryptUid": f.get("encryptUid", f.get("encryptFriendId", "")),
-                    "securityId": f.get("securityId", ""),
-                })
+                source_type = f.get("sourceType")
+                source_label = (
+                    source_map.get(source_type, str(source_type or "")) if isinstance(source_type, int) else str(source_type or "")
+                )
+                writer.writerow(
+                    {
+                        "姓名": f.get("name", ""),
+                        "关联职位": f.get("jobName", ""),
+                        "来源": source_label,
+                        "最近时间": f.get("lastTime", ""),
+                        "新牛人": "是" if f.get("newGeek") else "",
+                        "encryptUid": f.get("encryptUid", f.get("encryptFriendId", "")),
+                        "securityId": f.get("securityId", ""),
+                    }
+                )
             output_text = buf.getvalue()
 
         if output_file:
@@ -617,8 +655,11 @@ def recruiter_export(enc_job_id: str, output_file: str | None, fmt: str) -> None
 @click.option("--security-id", default="", help="候选人 securityId")
 @structured_output_options
 def recruiter_resume(
-    encrypt_geek_id: str, encrypt_job_id: str, security_id: str,
-    as_json: bool, as_yaml: bool,
+    encrypt_geek_id: str,
+    encrypt_job_id: str,
+    security_id: str,
+    as_json: bool,
+    as_yaml: bool,
 ) -> None:
     """查看候选人完整简历 (View candidate full resume)"""
     cred = require_auth()
@@ -759,8 +800,11 @@ def recruiter_labels(as_json: bool, as_yaml: bool) -> None:
         console.print(table)
 
     handle_command(
-        cred, action=lambda c: c.get_boss_friend_labels(),
-        render=_render, as_json=as_json, as_yaml=as_yaml,
+        cred,
+        action=lambda c: c.get_boss_friend_labels(),
+        render=_render,
+        as_json=as_json,
+        as_yaml=as_yaml,
     )
 
 
@@ -825,8 +869,11 @@ def recruiter_chat(friend_id: int, count: int, as_json: bool, as_yaml: bool) -> 
 @click.option("--job-id", default=0, type=int, help="关联职位 ID")
 @structured_output_options
 def recruiter_geek(
-    encrypt_geek_id: str, security_id: str, job_id: int,
-    as_json: bool, as_yaml: bool,
+    encrypt_geek_id: str,
+    security_id: str,
+    job_id: int,
+    as_json: bool,
+    as_yaml: bool,
 ) -> None:
     """查看候选人详细信息 (需要 encryptGeekId)"""
     cred = require_auth()
@@ -875,9 +922,7 @@ def recruiter_geek(
         work_exp = geek.get("workExpList", [])
         work_lines = []
         for w in work_exp[:5]:
-            work_lines.append(
-                f"  {w.get('timeDesc', '')}  {w.get('company', '')} · {w.get('positionName', '')}"
-            )
+            work_lines.append(f"  {w.get('timeDesc', '')}  {w.get('company', '')} · {w.get('positionName', '')}")
 
         panel_text = (
             f"[bold cyan]{name}[/bold cyan]  {gender}  {age}\n"
@@ -911,12 +956,16 @@ def recruiter_geek(
 @click.option("--security-id", default="", help="候选人 securityId")
 @click.option("-o", "--output", "output_file", default=None, help="输出文件路径 (默认: <姓名>_resume.md)")
 def recruiter_resume_download(
-    encrypt_geek_id: str, encrypt_job_id: str, security_id: str, output_file: str | None,
+    encrypt_geek_id: str,
+    encrypt_job_id: str,
+    security_id: str,
+    output_file: str | None,
 ) -> None:
     """导出候选人简历为 Markdown 文件"""
     cred = require_auth()
 
     try:
+
         def _fetch(c: BossClient) -> dict:
             nonlocal encrypt_job_id, security_id
             if not encrypt_job_id:
@@ -1138,10 +1187,7 @@ def recruiter_job_reopen(encrypt_job_id: str, yes: bool) -> None:
 
 # ── Recruiter Chat Actions ──────────────────────────────────────────
 
-_STOKEN_HINT = (
-    "[yellow]\u26a0\ufe0f 此操作需要 __zp_stoken__ (由浏览器 JS 生成)。"
-    "请先在浏览器登录后执行 boss login 补全 Cookie。[/yellow]"
-)
+_STOKEN_HINT = "[yellow]\u26a0\ufe0f 此操作需要 __zp_stoken__ (由浏览器 JS 生成)。请先在浏览器登录后执行 boss login 补全 Cookie。[/yellow]"
 
 
 def _chat_action_hint(exc: BossApiError) -> None:
@@ -1197,8 +1243,11 @@ def recruiter_request_resume(friend_id: int, yes: bool, as_json: bool, as_yaml: 
         console.print(f"[green]已向候选人请求简历 (friendId={friend_id}, uid={uid})[/green]")
 
     handle_command(
-        cred, action=_action, render=_render,
-        as_json=as_json, as_yaml=as_yaml,
+        cred,
+        action=_action,
+        render=_render,
+        as_json=as_json,
+        as_yaml=as_yaml,
         error_hint=_chat_action_hint,
     )
 
@@ -1227,8 +1276,11 @@ def recruiter_exchange_phone(friend_id: int, yes: bool, as_json: bool, as_yaml: 
         console.print(f"[green]已向候选人请求交换手机号 (friendId={friend_id}, uid={uid})[/green]")
 
     handle_command(
-        cred, action=_action, render=_render,
-        as_json=as_json, as_yaml=as_yaml,
+        cred,
+        action=_action,
+        render=_render,
+        as_json=as_json,
+        as_yaml=as_yaml,
         error_hint=_chat_action_hint,
     )
 
@@ -1257,8 +1309,11 @@ def recruiter_exchange_wechat(friend_id: int, yes: bool, as_json: bool, as_yaml:
         console.print(f"[green]已向候选人请求交换微信 (friendId={friend_id}, uid={uid})[/green]")
 
     handle_command(
-        cred, action=_action, render=_render,
-        as_json=as_json, as_yaml=as_yaml,
+        cred,
+        action=_action,
+        render=_render,
+        as_json=as_json,
+        as_yaml=as_yaml,
         error_hint=_chat_action_hint,
     )
 
@@ -1272,9 +1327,14 @@ def recruiter_exchange_wechat(friend_id: int, yes: bool, as_json: bool, as_yaml:
 @click.option("-y", "--yes", is_flag=True, help="跳过确认提示")
 @structured_output_options
 def recruiter_invite_interview(
-    encrypt_geek_id: str, encrypt_job_id: str, address: str,
-    start_time: str, description: str, yes: bool,
-    as_json: bool, as_yaml: bool,
+    encrypt_geek_id: str,
+    encrypt_job_id: str,
+    address: str,
+    start_time: str,
+    description: str,
+    yes: bool,
+    as_json: bool,
+    as_yaml: bool,
 ) -> None:
     """邀请候选人面试 (Invite candidate for interview)"""
     cred = require_auth()
@@ -1321,8 +1381,11 @@ def recruiter_invite_interview(
         console.print(f"[green]已发送面试邀请 -> {encrypt_geek_id}[/green]")
 
     handle_command(
-        cred, action=_action, render=_render,
-        as_json=as_json, as_yaml=as_yaml,
+        cred,
+        action=_action,
+        render=_render,
+        as_json=as_json,
+        as_yaml=as_yaml,
         error_hint=_chat_action_hint,
     )
 
@@ -1333,8 +1396,11 @@ def recruiter_invite_interview(
 @click.option("-y", "--yes", is_flag=True, help="跳过确认提示")
 @structured_output_options
 def recruiter_mark_unsuitable(
-    encrypt_geek_id: str, encrypt_job_id: str, yes: bool,
-    as_json: bool, as_yaml: bool,
+    encrypt_geek_id: str,
+    encrypt_job_id: str,
+    yes: bool,
+    as_json: bool,
+    as_yaml: bool,
 ) -> None:
     """标记候选人不合适 (Mark candidate as unsuitable)"""
     cred = require_auth()
@@ -1356,7 +1422,10 @@ def recruiter_mark_unsuitable(
         console.print(f"[green]已标记候选人为不合适 -> {encrypt_geek_id}[/green]")
 
     handle_command(
-        cred, action=_action, render=_render,
-        as_json=as_json, as_yaml=as_yaml,
+        cred,
+        action=_action,
+        render=_render,
+        as_json=as_json,
+        as_yaml=as_yaml,
         error_hint=_chat_action_hint,
     )

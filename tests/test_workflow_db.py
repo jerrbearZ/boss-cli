@@ -21,7 +21,7 @@ def test_init_db_creates_expected_tables(tmp_path):
     finally:
         store.close()
 
-    assert schema_version == 5
+    assert schema_version == 6
     assert {
         "accounts",
         "jobs",
@@ -232,7 +232,7 @@ def test_v2_database_migrates_in_place(tmp_path):
     try:
         account = store.list_accounts()[0]
 
-        assert store.current_schema_version() == 5
+        assert store.current_schema_version() == 6
         assert account["account_hash"] == "existing"
         assert account["identity_source"] == "credential"
         assert "sync_checkpoints" in store.table_names()
@@ -280,7 +280,7 @@ def test_v3_actions_migrate_to_typed_nullable_actions(tmp_path):
         action = store.get_action(1)
         columns = {row["name"]: row for row in store.conn.execute("PRAGMA table_info(outbound_actions)")}
 
-        assert store.current_schema_version() == 5
+        assert store.current_schema_version() == 6
         assert action is not None
         assert action["action_type"] == "send_message"
         assert action["status"] == "needs_review"
@@ -504,6 +504,6 @@ def test_workflow_init_db_command_outputs_json(tmp_path):
     payload = json.loads(result.output)
     assert payload["ok"] is True
     assert payload["data"]["db"] == str(db_path)
-    assert payload["data"]["schema_version"] == 5
+    assert payload["data"]["schema_version"] == 6
     assert "outbound_actions" in payload["data"]["tables"]
     assert db_path.exists()

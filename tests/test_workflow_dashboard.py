@@ -295,9 +295,7 @@ def test_sender_runs_message_then_wechat_in_dependency_order(tmp_path):
         assert result["messages_verified"] == 1
         assert result["wechat_verified"] == 1
         assert store.queue_summary()["verified"] == 2
-        assert store.conn.execute(
-            "SELECT COUNT(*) FROM messages WHERE content_kind='contact_request'"
-        ).fetchone()[0] == 1
+        assert store.conn.execute("SELECT COUNT(*) FROM messages WHERE content_kind='contact_request'").fetchone()[0] == 1
     finally:
         store.close()
 
@@ -455,7 +453,7 @@ def test_dashboard_http_health_endpoint(tmp_path):
 
         assert response.status == 200
         assert payload["ok"] is True
-        assert payload["data"]["schema_version"] == 5
+        assert payload["data"]["schema_version"] == 6
         assert payload["data"]["queue"]["total"] == 0
     finally:
         server.shutdown()
@@ -479,6 +477,83 @@ def test_dashboard_http_has_no_manual_enqueue_endpoint(tmp_path):
         assert response.status == 404
         assert payload["ok"] is False
         assert payload["error"]["message"] == "Not found"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_dashboard_rejects_cross_origin_writes(tmp_path):
+    db_path = tmp_path / "workflow.db"
+    init_db(db_path).close()
+    runtime = DashboardRuntime(db_path)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(runtime))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", server.server_port)
+        conn.request(
+            "POST",
+            "/api/automation/pause",
+            body=json.dumps({"reason": "cross-site"}),
+            headers={"Content-Type": "application/json", "Origin": "https://attacker.example"},
+        )
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+
+        assert response.status == 403
+        assert payload["ok"] is False
+        with init_db(db_path) as store:
+            assert not store.is_paused()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_dashboard_requires_json_for_writes(tmp_path):
+    db_path = tmp_path / "workflow.db"
+    init_db(db_path).close()
+    runtime = DashboardRuntime(db_path)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(runtime))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", server.server_port)
+        conn.request(
+            "POST",
+            "/api/automation/pause",
+            body="reason=cross-site",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+
+        assert response.status == 415
+        assert payload["ok"] is False
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_dashboard_rejects_loopback_origin_on_a_different_port(tmp_path):
+    db_path = tmp_path / "workflow.db"
+    init_db(db_path).close()
+    runtime = DashboardRuntime(db_path)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(runtime))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", server.server_port)
+        conn.request(
+            "POST",
+            "/api/automation/pause",
+            body=json.dumps({"reason": "other-local-service"}),
+            headers={"Content-Type": "application/json", "Origin": "http://127.0.0.1:1"},
+        )
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+
+        assert response.status == 403
+        assert payload["ok"] is False
     finally:
         server.shutdown()
         server.server_close()

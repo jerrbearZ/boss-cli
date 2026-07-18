@@ -1,6 +1,6 @@
 # BOSS Recruiting Automation: Project Evolution Visual Brief
 
-Date: 2026-07-15
+Date: 2026-07-17
 
 ## Purpose Of This Document
 
@@ -29,6 +29,7 @@ dashboard for supervision rather than execution.
 | July 14 | Continuous-automation pivot | Single-owner polling daemon, constrained model decisions, durable planning, and dashboard moved outside execution. |
 | July 15 | Qwen and approved catalog | Alibaba `qwen-plus`, seven immutable templates, privacy boundary, dry/live isolation, and candidate-scoped canary controls. |
 | July 15 | Live acceptance and full run | End-to-end canary, macOS daemon smoke test, 10 verified live replies, 9 new verified WeChat requests, and one existing exchange safely skipped. |
+| July 15-17 | Desktop deployment controls | Dry-by-default Windows Task Scheduler and Ubuntu user-systemd deployments, protected per-user secrets, health/recovery controls, CI gates, and operator runbooks. |
 
 ## 1. The Existing Structure At The Beginning
 
@@ -194,7 +195,7 @@ Responsibilities:
 
 ### C. SQLite state layer
 
-Primary module: `workflow/db.py`, schema, and ordered migrations through schema version 5.
+Primary module: `workflow/db.py`, schema, and ordered migrations through schema version 6.
 
 Responsibilities:
 
@@ -275,17 +276,17 @@ Responsibilities:
 
 ### Engineering verification
 
-- Python 3.13 suite: **196 passed, 7 skipped**.
-- Ruff checks passed.
+- Python 3.13 non-live suite: **243 passed, 2 skipped, 7 live tests deselected**.
+- Ruff lint/format and project-wide Pyright checks passed.
+- The locked dependency audit found no known third-party vulnerabilities; the high-severity Bandit scan passed.
 - Wheel and source distribution builds passed.
 - API credentials were process-only and were not persisted in repository files or SQLite.
-- Current development branch: `continuous-recruiting-automation`.
+- Native Windows and Ubuntu deployment implementations and CI gates are present on the deployment branch.
 
 ### Important remaining boundaries
 
-- macOS is validated; Windows is an engineering target, not yet production-certified.
-- Windows still needs CI, browser-cookie/DPAPI acceptance, Camoufox validation, and an interactive-session
-  supervisor such as Task Scheduler.
+- macOS behavior is validated; Windows and Ubuntu repository implementations are complete but still need their
+  target-PC browser/keyring/session matrices, controlled canaries, recovery drills, and supervised soaks.
 - The BOSS integration relies on reverse-engineered APIs and current web selectors, which may change.
 - There is no BOSS webhook; continuous behavior is bounded polling.
 - Captcha, anti-automation warnings, target mismatches, and uncertain browser outcomes still require an
@@ -352,9 +353,9 @@ Add a compact verification panel on the right or bottom:
 - **9** new WeChat requests verified.
 - **1** existing exchange safely skipped.
 - **0** executable actions remaining.
-- **196 passed / 7 skipped** tests.
+- **243 passed / 2 skipped** non-live tests.
 - **macOS validated**.
-- **Windows certification pending**.
+- **Windows + Ubuntu PC certification pending**.
 
 ### Exact short labels to prioritize
 

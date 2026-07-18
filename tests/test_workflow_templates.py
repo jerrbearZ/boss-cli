@@ -35,12 +35,8 @@ def test_install_templates_approves_catalog_and_retires_legacy(tmp_path):
     with init_db(db_path) as store:
         active = store.list_active_templates()
         assert len(active) == len(AUTOMOTIVE_WECHAT_TEMPLATES)
-        assert {row["body"] for row in active} == {
-            template.body for template in AUTOMOTIVE_WECHAT_TEMPLATES
-        }
-        assert {row["selection_guidance"] for row in active} == {
-            template.selection_guidance for template in AUTOMOTIVE_WECHAT_TEMPLATES
-        }
+        assert {row["body"] for row in active} == {template.body for template in AUTOMOTIVE_WECHAT_TEMPLATES}
+        assert {row["selection_guidance"] for row in active} == {template.selection_guidance for template in AUTOMOTIVE_WECHAT_TEMPLATES}
         assert store.get_template(legacy_id)["retired_at"] is not None
 
 

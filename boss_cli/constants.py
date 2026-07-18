@@ -1,10 +1,10 @@
 """Constants for Boss CLI — API endpoints, headers, and config paths."""
 
-from pathlib import Path
+from .platform import PATHS, build_api_headers
 
 # ── Config ──────────────────────────────────────────────────────────
-CONFIG_DIR = Path.home() / ".config" / "boss-cli"
-CREDENTIAL_FILE = CONFIG_DIR / "credential.json"
+CONFIG_DIR = PATHS.config_dir
+CREDENTIAL_FILE = PATHS.credential_file
 AUTH_HEALTH_CACHE_TTL_S = 45
 
 # ── Base URL ────────────────────────────────────────────────────────
@@ -71,26 +71,8 @@ BOSS_INTERVIEW_INVITE_URL = "/wapi/zpinterview/boss/interview/invite"
 BOSS_REMOVE_FILTER_URL = "/wapi/zprelation/friend/bossRemoveFilter"
 BOSS_SESSION_ENTER_URL = "/wapi/zpchat/session/bossEnter"
 
-# ── Request Headers (Chrome 145, macOS) ─────────────────────────────
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/145.0.0.0 Safari/537.36"
-    ),
-    "sec-ch-ua": '"Chromium";v="145", "Not(A:Brand";v="99", "Google Chrome";v="145"',
-    "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": '"macOS"',
-    "Sec-Fetch-Dest": "empty",
-    "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Site": "same-origin",
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-    "DNT": "1",
-    "Priority": "u=1, i",
-    "Origin": BASE_URL,
-    "Referer": f"{BASE_URL}/",
-}
+# ── API Request Headers (browser automation supplies its own) ──────
+HEADERS = build_api_headers()
 
 # ── Cookie keys required for authenticated sessions ─────────────────
 REQUIRED_COOKIES = {"__zp_stoken__", "wt2", "wbg", "zp_at"}

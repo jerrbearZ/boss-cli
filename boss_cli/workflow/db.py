@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -13,8 +12,9 @@ from typing import Any, Iterator
 
 from .models import ALL_ACTION_STATUSES, QueueSummary
 from .redaction import redact_text, sha256_text, stable_json_dumps
+from ..platform import PATHS, ensure_private_directory, ensure_private_file
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 MIGRATIONS_PATH = Path(__file__).with_name("migrations")
 
@@ -26,24 +26,28 @@ def utc_now() -> str:
 
 def default_db_path() -> Path:
     """Return the default local workflow database path."""
+    import os
+
     env_path = os.environ.get("BOSS_WORKFLOW_DB")
     if env_path:
         return Path(env_path).expanduser()
-    data_home = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")).expanduser()
-    return data_home / "boss-cli" / "workflow.db"
+    return PATHS.workflow_db
 
 
 def init_db(path: Path | str | None = None) -> "WorkflowStore":
     """Initialize or open the workflow database."""
     db_path = _resolve_db_path(path)
+    existed_before = db_path != Path(":memory:") and db_path.exists()
     if db_path != Path(":memory:"):
-        db_path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_private_directory(db_path.parent)
 
     conn = sqlite3.connect(str(db_path))
+    if db_path != Path(":memory:"):
+        ensure_private_file(db_path)
     conn.row_factory = sqlite3.Row
     _configure_connection(conn)
     conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
-    _apply_migrations(conn)
+    _apply_migrations(conn, db_path=db_path, backup_before_migration=existed_before)
     conn.commit()
     return WorkflowStore(db_path, conn)
 
@@ -64,17 +68,55 @@ def _configure_connection(conn: sqlite3.Connection) -> None:
         pass
 
 
-def _apply_migrations(conn: sqlite3.Connection) -> None:
+def _apply_migrations(
+    conn: sqlite3.Connection,
+    *,
+    db_path: Path | None = None,
+    backup_before_migration: bool = False,
+) -> None:
     """Apply ordered SQL migrations newer than the database schema version."""
     row = conn.execute("SELECT MAX(version) AS version FROM schema_migrations").fetchone()
     current = int(row["version"] or 0)
+    pending = (
+        [path for path in sorted(MIGRATIONS_PATH.glob("[0-9][0-9][0-9][0-9]_*.sql")) if int(path.name.split("_", 1)[0]) > current]
+        if MIGRATIONS_PATH.exists()
+        else []
+    )
+    if pending and backup_before_migration and db_path and db_path != Path(":memory:"):
+        _backup_before_migration(conn, db_path, current)
     if not MIGRATIONS_PATH.exists():
         return
-    for path in sorted(MIGRATIONS_PATH.glob("[0-9][0-9][0-9][0-9]_*.sql")):
+    for path in pending:
         version = int(path.name.split("_", 1)[0])
         if version > current:
             conn.executescript(path.read_text(encoding="utf-8"))
             current = version
+
+
+def _backup_before_migration(conn: sqlite3.Connection, db_path: Path, current_version: int) -> None:
+    """Create and verify a bounded backup before the first pending migration."""
+    backup_dir = PATHS.backup_dir if db_path == PATHS.workflow_db else db_path.parent / "backups"
+    ensure_private_directory(backup_dir)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    backup_path = backup_dir / f"workflow-pre-update-schema{current_version}-{stamp}-{uuid.uuid4().hex[:8]}.db"
+    backup = sqlite3.connect(str(backup_path))
+    try:
+        conn.backup(backup)
+        backup.commit()
+        ensure_private_file(backup_path)
+        integrity = str(backup.execute("PRAGMA integrity_check").fetchone()[0])
+        if integrity != "ok":
+            raise sqlite3.DatabaseError(f"pre-migration backup integrity failed: {integrity}")
+    except Exception:
+        backup.close()
+        backup_path.unlink(missing_ok=True)
+        raise
+    finally:
+        if backup:
+            backup.close()
+    backups = sorted(backup_dir.glob("workflow-pre-update-*.db"), key=lambda item: item.stat().st_mtime, reverse=True)
+    for expired in backups[3:]:
+        expired.unlink()
 
 
 class WorkflowStore:
@@ -115,9 +157,7 @@ class WorkflowStore:
             self.conn.commit()
 
     def table_names(self) -> list[str]:
-        rows = self.conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
-        ).fetchall()
+        rows = self.conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").fetchall()
         return [str(row["name"]) for row in rows]
 
     def current_schema_version(self) -> int:
@@ -1117,9 +1157,7 @@ class WorkflowStore:
         return [_row_to_dict(row) or {} for row in rows]
 
     def list_templates(self) -> list[dict[str, Any]]:
-        rows = self.conn.execute(
-            "SELECT * FROM message_templates ORDER BY created_at DESC, id DESC"
-        ).fetchall()
+        rows = self.conn.execute("SELECT * FROM message_templates ORDER BY created_at DESC, id DESC").fetchall()
         return [_row_to_dict(row) or {} for row in rows]
 
     def list_active_templates(self) -> list[dict[str, Any]]:
@@ -1338,9 +1376,7 @@ class WorkflowStore:
     def automation_summary(self, *, account_id: int | None) -> dict[str, int]:
         summary = {"selected": 0, "review": 0, "skipped": 0, "error": 0, "dry_run": 0, "total": 0}
         if account_id is None:
-            rows = self.conn.execute(
-                "SELECT outcome, COUNT(*) AS count FROM automation_decisions GROUP BY outcome"
-            ).fetchall()
+            rows = self.conn.execute("SELECT outcome, COUNT(*) AS count FROM automation_decisions GROUP BY outcome").fetchall()
         else:
             rows = self.conn.execute(
                 "SELECT outcome, COUNT(*) AS count FROM automation_decisions WHERE account_id=? GROUP BY outcome",
@@ -1397,14 +1433,22 @@ class WorkflowStore:
                 "SELECT * FROM automation_daemon_state WHERE daemon_name=?",
                 (daemon_name,),
             ).fetchone()
-            if (
-                row is not None
-                and row["owner_id"] not in (None, owner_id)
-                and row["status"] == "running"
-                and str(row["lease_expires_at"] or "") > claim_time
-            ):
+            if row is not None and row["owner_id"] not in (None, owner_id) and str(row["lease_expires_at"] or "") > claim_time:
                 self.conn.commit()
                 return False
+            # A prior process may have been force-terminated after a browser
+            # click.  Such actions are intentionally never replayed.
+            self.conn.execute(
+                """
+                UPDATE outbound_actions
+                SET status='needs_review', locked_by=NULL, locked_at=NULL,
+                    locked_until=NULL, last_error_code='uncertain_after_process_exit',
+                    last_error_message_redacted='Action was in progress when daemon ownership was lost',
+                    updated_at=?
+                WHERE status='sending'
+                """,
+                (claim_time,),
+            )
             self.conn.execute(
                 """
                 INSERT INTO automation_daemon_state(
@@ -1420,6 +1464,7 @@ class WorkflowStore:
                   lease_expires_at=excluded.lease_expires_at,
                   last_error_code=NULL,
                   last_error_redacted=NULL,
+                  stop_requested_at=NULL,
                   updated_at=excluded.updated_at
                 """,
                 (daemon_name, owner_id, int(live_mode), claim_time, claim_time, lease_expires, claim_time),
@@ -1535,6 +1580,109 @@ class WorkflowStore:
         if isinstance(value, dict):
             return bool(value.get("paused"))
         return bool(value)
+
+    def request_daemon_stop(self, daemon_name: str = "primary", *, reason: str = "operator") -> dict[str, Any]:
+        """Persist a stop request that survives shells and process boundaries."""
+        now = utc_now()
+        request = {"requested": True, "requested_at": now, "reason": redact_text(reason, max_length=120)}
+        self.set_setting(f"daemon_stop:{daemon_name}", request)
+        self.conn.execute(
+            """
+            INSERT INTO automation_daemon_state(daemon_name, status, live_mode, stop_requested_at, updated_at)
+            VALUES (?, 'stop_requested', 0, ?, ?)
+            ON CONFLICT(daemon_name) DO UPDATE SET
+              status=CASE WHEN status='running' THEN 'stop_requested' ELSE status END,
+              stop_requested_at=excluded.stop_requested_at,
+              updated_at=excluded.updated_at
+            """,
+            (daemon_name, now, now),
+        )
+        self._commit()
+        return request
+
+    def clear_daemon_stop(self, daemon_name: str = "primary") -> None:
+        self.set_setting(f"daemon_stop:{daemon_name}", None)
+        self.conn.execute(
+            "UPDATE automation_daemon_state SET stop_requested_at=NULL, updated_at=? WHERE daemon_name=?",
+            (utc_now(), daemon_name),
+        )
+        self._commit()
+
+    def force_release_daemon(self, daemon_name: str = "primary") -> int:
+        """Release ownership after the supervisor has terminated the process.
+
+        Any action that may have crossed the browser side-effect boundary is
+        moved to review before ownership is cleared.
+        """
+        now = utc_now()
+        cursor = self.conn.execute(
+            """
+            UPDATE outbound_actions
+            SET status='needs_review', locked_by=NULL, locked_at=NULL, locked_until=NULL,
+                last_error_code='uncertain_after_forced_stop',
+                last_error_message_redacted='Supervisor force-stopped the daemon during an action',
+                updated_at=?
+            WHERE status='sending'
+            """,
+            (now,),
+        )
+        self.conn.execute(
+            """
+            UPDATE automation_daemon_state
+            SET owner_id=NULL, status='forced_stopped', heartbeat_at=?, lease_expires_at=NULL,
+                next_poll_at=NULL, updated_at=?
+            WHERE daemon_name=?
+            """,
+            (now, now, daemon_name),
+        )
+        self.conn.execute(
+            """
+            INSERT INTO events(event_type, severity, summary, details_json, created_at)
+            VALUES ('daemon_forced_stopped', 'warning',
+                    'Supervisor force-released daemon ownership', ?, ?)
+            """,
+            (stable_json_dumps({"daemon_name": daemon_name, "actions_moved_to_review": int(cursor.rowcount)}), now),
+        )
+        self._commit()
+        return int(cursor.rowcount)
+
+    def is_daemon_stop_requested(self, daemon_name: str = "primary") -> bool:
+        value = self.get_setting(f"daemon_stop:{daemon_name}", None)
+        return bool(isinstance(value, dict) and value.get("requested"))
+
+    def set_operator_required(self, code: str, *, daemon_name: str = "primary") -> None:
+        """Persist a non-secret condition that requires operator intervention."""
+        now = utc_now()
+        value = {"code": code, "required_at": now}
+        self.set_setting("operator_required", value)
+        self.conn.execute(
+            """
+            INSERT INTO automation_daemon_state(
+              daemon_name, status, live_mode, operator_required_code, operator_required_at, updated_at
+            ) VALUES (?, 'operator_required', 0, ?, ?, ?)
+            ON CONFLICT(daemon_name) DO UPDATE SET
+              status='operator_required', operator_required_code=excluded.operator_required_code,
+              operator_required_at=excluded.operator_required_at, updated_at=excluded.updated_at
+            """,
+            (daemon_name, code, now, now),
+        )
+        self._commit()
+
+    def clear_operator_required(self, *, daemon_name: str = "primary") -> None:
+        self.set_setting("operator_required", None)
+        self.conn.execute(
+            """
+            UPDATE automation_daemon_state
+            SET operator_required_code=NULL, operator_required_at=NULL, updated_at=?
+            WHERE daemon_name=?
+            """,
+            (utc_now(), daemon_name),
+        )
+        self._commit()
+
+    def get_operator_required(self) -> dict[str, Any] | None:
+        value = self.get_setting("operator_required", None)
+        return value if isinstance(value, dict) and value.get("code") else None
 
     def create_run(
         self,

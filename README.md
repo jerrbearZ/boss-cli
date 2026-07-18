@@ -205,6 +205,17 @@ boss dashboard --port 8765                                    # Monitor and appr
 
 `workflow daemon` is dry by default. In live mode, an LLM may only select from exact operator-approved templates; it cannot generate outbound text. The dashboard is supervisory and has no manual send endpoint. Full resume reads remain excluded because they may trigger a candidate-visible notification. The default database is `~/.local/share/boss-cli/workflow.db`; set `BOSS_WORKFLOW_DB` or pass `--db` to override it. See [continuous automation](./docs/recruiting-workflow/continuous-automation.md) for rollout and recovery.
 
+For a dedicated native Windows 11 automation PC, use the dry-by-default Task Scheduler deployment, current-user
+DPAPI secrets, health exit codes, and backup/restore scripts in the
+[Windows operator runbook](./docs/recruiting-workflow/windows-operator-runbook.md). Windows state lives under
+`%LOCALAPPDATA%\BossCLI`; the dashboard is restricted to `127.0.0.1`.
+
+For an Ubuntu 24.04 LTS x86_64 desktop, use the dry-by-default `systemd --user` deployment, Linux Secret Service
+credentials, XDG state paths, health codes, and recovery scripts in the
+[Linux operator runbook](./docs/recruiting-workflow/linux-operator-runbook.md). The daemon requires the same
+logged-in graphical user session that owns the browser profile and keyring; it is not a headless root service.
+The installer verifies an exact Camoufox archive digest and performs a real browser-context smoke test.
+
 ## Structured Output
 
 All commands with `--json` / `--yaml` use a unified output envelope (see [SCHEMA.md](./SCHEMA.md)):
@@ -225,7 +236,7 @@ All commands with `--json` / `--yaml` use a unified output envelope (see [SCHEMA
 
 boss-cli supports multiple authentication methods:
 
-1. **Saved cookies** — loads from `~/.config/boss-cli/credential.json`
+1. **Saved cookies** — loads from `~/.config/boss-cli/credential.json` on macOS, current-user DPAPI on Windows, or the current desktop user's Secret Service keyring on Linux
 2. **Browser cookies** — auto-detects installed browsers (Chrome, Firefox, Edge, Brave, Arc, Chromium, Opera, Vivaldi, Safari, LibreWolf)
 3. **QR code login** — terminal QR output using Unicode half-blocks, scan with Boss 直聘 APP
 
@@ -247,7 +258,7 @@ Saved cookies auto-refresh from browser after **7 days**. If browser refresh fai
 - **Exponential backoff**: auto-retry on HTTP 429/5xx (max 3 retries)
 - **Response cookie merge**: `Set-Cookie` headers merged back into session
 - **HTML redirect detection**: catches auth redirects to login page
-- **Browser fingerprint**: macOS Chrome 145 UA, `sec-ch-ua`, `DNT`, `Priority` headers
+- **Browser fingerprint**: platform-consistent desktop Chrome UA, `sec-ch-ua`, `DNT`, and `Priority` headers
 - **Request logging**: `boss -v` shows request URLs, status codes, and timing
 
 ## Use as AI Agent Skill

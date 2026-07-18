@@ -28,8 +28,12 @@ logger = logging.getLogger(__name__)
 
 # ── Helper: render job table ────────────────────────────────────────
 
+
 def _render_job_table(
-    job_list: list[dict], title: str, page: int = 1, hint_next: str = "",
+    job_list: list[dict],
+    title: str,
+    page: int = 1,
+    hint_next: str = "",
 ) -> None:
     """Render a list of jobs as a rich table and save to index cache."""
     if not job_list:
@@ -76,6 +80,7 @@ def _render_job_table(
 
 # ── search ──────────────────────────────────────────────────────────
 
+
 @click.command()
 @click.argument("keyword")
 @click.option("-c", "--city", default="全国", help="城市名称或代码 (默认: 全国)")
@@ -89,10 +94,18 @@ def _render_job_table(
 @click.option("--job-type", type=click.Choice(list(JOB_TYPE_CODES.keys())), help="职位类型 (全职/兼职/实习)")
 @structured_output_options
 def search(
-    keyword: str, city: str, page: int,
-    salary: str | None, exp: str | None, degree: str | None,
-    industry: str | None, scale: str | None, stage: str | None, job_type: str | None,
-    as_json: bool, as_yaml: bool,
+    keyword: str,
+    city: str,
+    page: int,
+    salary: str | None,
+    exp: str | None,
+    degree: str | None,
+    industry: str | None,
+    scale: str | None,
+    stage: str | None,
+    job_type: str | None,
+    as_json: bool,
+    as_yaml: bool,
 ) -> None:
     """搜索职位 (例: boss search Python --city 北京 --industry 互联网)"""
     cred = require_auth()
@@ -108,9 +121,15 @@ def search(
 
     def _action(c: BossClient) -> dict:
         return c.search_jobs(
-            query=keyword, city=city_code, page=page,
-            experience=exp_code, degree=degree_code, salary=salary_code,
-            industry=industry_code, scale=scale_code, stage=stage_code,
+            query=keyword,
+            city=city_code,
+            page=page,
+            experience=exp_code,
+            degree=degree_code,
+            salary=salary_code,
+            industry=industry_code,
+            scale=scale_code,
+            stage=stage_code,
             job_type=job_type_code,
         )
 
@@ -130,13 +149,14 @@ def search(
             job_list,
             title=f"🔍 搜索: {keyword} ({filter_str})",
             page=page,
-            hint_next=f"更多结果: boss search \"{keyword}\" --city {city} -p {page + 1}" if data.get("hasMore") else "",
+            hint_next=f'更多结果: boss search "{keyword}" --city {city} -p {page + 1}' if data.get("hasMore") else "",
         )
 
     handle_command(cred, action=_action, render=_render, as_json=as_json, as_yaml=as_yaml)
 
 
 # ── recommend ───────────────────────────────────────────────────────
+
 
 @click.command()
 @click.option("-p", "--page", default=1, type=int, help="页码 (默认: 1)")
@@ -162,6 +182,7 @@ def recommend(page: int, as_json: bool, as_yaml: bool) -> None:
 
 # ── detail ──────────────────────────────────────────────────────────
 
+
 @click.command()
 @click.argument("security_id")
 @structured_output_options
@@ -176,6 +197,7 @@ def detail(security_id: str, as_json: bool, as_yaml: bool) -> None:
 
 
 # ── show (short-index) ──────────────────────────────────────────────
+
 
 @click.command()
 @click.argument("index", type=int)
@@ -265,6 +287,7 @@ def _render_detail(data: dict) -> None:
 
 # ── export ──────────────────────────────────────────────────────────
 
+
 @click.command()
 @click.argument("keyword")
 @click.option("-c", "--city", default="全国", help="城市名称或代码")
@@ -279,10 +302,18 @@ def _render_detail(data: dict) -> None:
 @click.option("-o", "--output", "output_file", default=None, help="输出文件路径 (默认: stdout)")
 @click.option("--format", "fmt", type=click.Choice(["csv", "json"]), default="csv", help="输出格式")
 def export(
-    keyword: str, city: str, count: int,
-    salary: str | None, exp: str | None, degree: str | None,
-    industry: str | None, scale: str | None, stage: str | None, job_type: str | None,
-    output_file: str | None, fmt: str,
+    keyword: str,
+    city: str,
+    count: int,
+    salary: str | None,
+    exp: str | None,
+    degree: str | None,
+    industry: str | None,
+    scale: str | None,
+    stage: str | None,
+    job_type: str | None,
+    output_file: str | None,
+    fmt: str,
 ) -> None:
     """导出搜索结果为 CSV 或 JSON
 
@@ -303,13 +334,20 @@ def export(
     pages_needed = (count + 14) // 15  # 15 per page
 
     try:
+
         def _collect(c: BossClient) -> list[dict]:
             nonlocal all_jobs
             for pg in range(1, pages_needed + 1):
                 data = c.search_jobs(
-                    query=keyword, city=city_code, page=pg,
-                    experience=exp_code, degree=degree_code, salary=salary_code,
-                    industry=industry_code, scale=scale_code, stage=stage_code,
+                    query=keyword,
+                    city=city_code,
+                    page=pg,
+                    experience=exp_code,
+                    degree=degree_code,
+                    salary=salary_code,
+                    industry=industry_code,
+                    scale=scale_code,
+                    stage=stage_code,
                     job_type=job_type_code,
                 )
                 job_list = data.get("jobList", [])
@@ -331,17 +369,19 @@ def export(
             writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
             writer.writeheader()
             for job in all_jobs:
-                writer.writerow({
-                    "职位": job.get("jobName", ""),
-                    "公司": job.get("brandName", ""),
-                    "薪资": job.get("salaryDesc", ""),
-                    "经验": job.get("jobExperience", ""),
-                    "学历": job.get("jobDegree", ""),
-                    "城市": job.get("cityName", ""),
-                    "地区": job.get("areaDistrict", ""),
-                    "技能": ", ".join(job.get("skills", [])),
-                    "securityId": job.get("securityId", ""),
-                })
+                writer.writerow(
+                    {
+                        "职位": job.get("jobName", ""),
+                        "公司": job.get("brandName", ""),
+                        "薪资": job.get("salaryDesc", ""),
+                        "经验": job.get("jobExperience", ""),
+                        "学历": job.get("jobDegree", ""),
+                        "城市": job.get("cityName", ""),
+                        "地区": job.get("areaDistrict", ""),
+                        "技能": ", ".join(job.get("skills", [])),
+                        "securityId": job.get("securityId", ""),
+                    }
+                )
             output_text = buf.getvalue()
 
         if output_file:
@@ -357,6 +397,7 @@ def export(
 
 
 # ── history ─────────────────────────────────────────────────────────
+
 
 @click.command()
 @click.option("-p", "--page", default=1, type=int, help="页码 (默认: 1)")
@@ -382,6 +423,7 @@ def history(page: int, as_json: bool, as_yaml: bool) -> None:
 
 # ── cities ──────────────────────────────────────────────────────────
 
+
 @click.command()
 def cities() -> None:
     """列出支持的城市代码"""
@@ -394,4 +436,4 @@ def cities() -> None:
         table.add_row(name, code)
 
     console.print(table)
-    console.print(f"\n  [dim]共 {len(codes)} 个城市。使用: boss search \"Python\" --city 杭州[/dim]")
+    console.print(f'\n  [dim]共 {len(codes)} 个城市。使用: boss search "Python" --city 杭州[/dim]')

@@ -4,7 +4,9 @@ Date: 2026-07-14
 
 ## Purpose
 
-This is the authoritative design and operations guide for the unattended BOSS recruiting workflow introduced in schema version 5.
+This is the authoritative core design and operations guide for the unattended BOSS recruiting workflow introduced
+in schema version 5. The Windows lifecycle, health, and operator-control extension is schema version 6 and is
+documented in [windows-operator-runbook.md](./windows-operator-runbook.md).
 
 The system continuously probes the recruiter inbox, persists new messages, asks an LLM to select one reply from an operator-approved catalog, queues the exact approved text, sends it through the verified BOSS Web adapter, then requests WeChat only after message delivery is verified. The dashboard monitors this process and manages template approval; it is no longer the execution engine.
 
@@ -158,27 +160,21 @@ cleared the owner and lease, and left queue and delivery counts unchanged.
 
 ### Windows
 
-The application components are plausibly Windows-compatible but the repository is not yet certified for
-production Windows deployment. Python, SQLite, `SIGINT`/`SIGTERM`, browser-cookie3, and Camoufox all have
-Windows paths or support, but the complete workflow has not run in Windows CI or against a real Windows
-BOSS browser session.
+The repository now includes native `%LOCALAPPDATA%\BossCLI` paths, current-user DPAPI secrets, Task Scheduler
+automation, Windows CI, health codes, graceful stop/uncertain-send recovery, backup/restore, and a complete
+operator runbook. Repository implementation is complete, but production certification still requires the target
+Windows PC's browser/session matrix, controlled canary, recovery drill, and 24-hour supervised soak.
 
-Windows deployment requires these additional acceptance gates:
+### Linux
 
-- Add a Windows CI job for installation, migrations, CLI tests, and the full unit suite.
-- Validate Chrome/Edge cookie extraction and DPAPI behavior with the browser both open and closed.
-- Validate `python -m camoufox fetch`, browser startup, message verification, and the full `换微信` flow.
-- Run the daemon under an interactive logged-in desktop session. The current headful browser flow is not
-  suitable for a Session 0 Windows service.
-- Add a supported supervisor definition, such as Task Scheduler at user logon or a service wrapper that can
-  launch in the interactive user session, with restart and graceful-stop behavior.
-- Store Alibaba and BOSS credentials through a Windows secret mechanism rather than checked-in files or
-  machine-wide plaintext environment variables.
-- Decide whether to retain the cross-platform `~/.local/share/boss-cli` default or adopt `%LOCALAPPDATA%` on
-  Windows, including a migration plan for existing databases.
+The repository now includes an Ubuntu 24.04 LTS x86_64 deployment using XDG paths, current-user Secret Service
+storage, hardened `systemd --user` daemon/dashboard/backup units, Linux browser-profile discovery, shell and unit
+validation in CI, guarded update/rollback, and an operator runbook. It deliberately requires a logged-in graphical
+user session rather than a root service, container, lingering headless manager, or SSH-only session.
 
-Until these gates pass, use the validated Mac runtime for live operation and treat Windows as an engineering
-target rather than a deployable production platform.
+Linux repository implementation is complete but not production-certified until an actual target PC proves
+keyring/browser access, three dry cycles, reboot/session behavior, outage and forced-exit recovery, one isolated
+reply/WeChat canary, backup/restore, and a clean 24-hour supervised soak.
 
 ## Operations
 
@@ -270,7 +266,7 @@ and verified before the dependent visible `换微信` control is executed for th
 
 ```bash
 uv sync --extra browser
-uv run python -m camoufox fetch
+uv run python -m boss_cli.camoufox_runtime install --smoke
 ```
 
 3. Confirm BOSS authentication is valid and identify one consenting test conversation by `friendId`.
@@ -321,7 +317,9 @@ Dashboard `Pause` sets durable global state. A paused daemon still synchronizes 
 
 `SIGINT` and `SIGTERM` request a clean stop. The daemon finishes or stops at its next safe check, releases its lease, and records `stopped`. Killing the process during an external browser action may leave an uncertain action; expired `sending` leases become `needs_review` rather than being replayed.
 
-The CLI is a continuous foreground process. Reboot restart and crash restart require an external supervisor such as launchd, systemd, or a container runtime. Secrets should be supplied by that supervisor's credential mechanism, not committed to this repository.
+The CLI is a continuous foreground process. Reboot restart and crash restart require an external supervisor. The
+supported repository deployments use interactive Task Scheduler tasks on Windows and `systemd --user` on Ubuntu;
+secrets remain in their user-scoped protected stores and are never committed to the repository.
 
 ## Failure Policy
 
@@ -352,9 +350,10 @@ It remains a trusted localhost application without user authentication. Do not b
 - The model provider is Alibaba Cloud Model Studio, using the `qwen-plus` alias by default.
 - Browser UI selectors may change when BOSS Web changes.
 - The dashboard does not resolve review decisions or retry individual actions yet.
-- Process supervision, secrets management, and OS startup installation are deployment responsibilities.
+- Process supervision, secrets management, and startup installation are implemented for Windows and Ubuntu but
+  still require target-PC certification.
 - One controlled canary and one 10-conversation Qwen-driven live batch have passed on macOS.
 
 ## Verification Baseline
 
-The implementation includes tests for schema migration, approved-ID constraints, malformed output, transient retry behavior, dry/live isolation, low-confidence review, decision idempotency, catalog reconsideration, pause behavior, candidate-scoped and multi-candidate queue claims, contact-request eligibility, completed-exchange exclusion, message-to-WeChat dependency order, the `换微信` consent sequence and current success text, retryable browser setup failures, immutable template replacement, lease exclusion, and removal of manual dashboard execution endpoints. The current clean Python 3.13 baseline is `196 passed, 7 skipped`.
+The implementation includes tests for schema migration, approved-ID constraints, malformed output, transient retry behavior, dry/live isolation, low-confidence review, decision idempotency, catalog reconsideration, pause behavior, candidate-scoped and multi-candidate queue claims, contact-request eligibility, completed-exchange exclusion, message-to-WeChat dependency order, the `换微信` consent sequence and current success text, retryable browser setup failures, immutable template replacement, lease exclusion, deployment control, and removal of manual dashboard execution endpoints. Use CI and the latest work-log entry for the current test count rather than this historical design note.

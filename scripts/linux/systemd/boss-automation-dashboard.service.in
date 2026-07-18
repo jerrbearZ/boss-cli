@@ -1,0 +1,29 @@
+[Unit]
+Description=Boss recruiting automation dashboard
+After=network.target
+
+[Service]
+Type=simple
+Environment=@XDG_CONFIG_ENV@
+Environment=@XDG_DATA_ENV@
+Environment=@XDG_STATE_ENV@
+Environment=@XDG_CACHE_ENV@
+ExecStartPre=@VALIDATE_SCRIPT@ --app-root @APP_ROOT@ --uv @UV@
+ExecStart=@DASHBOARD_SCRIPT@ --app-root @APP_ROOT@ --uv @UV@
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=@CONFIG_ROOT@ @DATA_ROOT@ @STATE_ROOT@
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=default.target

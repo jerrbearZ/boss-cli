@@ -11,6 +11,7 @@ from typing import Any
 
 import httpx
 
+from .auth import Credential
 from .constants import (
     BASE_URL,
     BOSS_CHAT_GEEK_INFO_URL,
@@ -60,6 +61,13 @@ from .exceptions import BossApiError, ParamError, RateLimitError, SessionExpired
 logger = logging.getLogger(__name__)
 
 
+def _require_object_list(value: object, action: str) -> list[dict[str, Any]]:
+    """Validate the dynamic JSON shape promised by list-returning endpoints."""
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        raise BossApiError(f"{action}: unexpected response shape", code="invalid_response")
+    return value
+
+
 class BossClient:
     """Boss Zhipin API client with Gaussian jitter, exponential backoff, and session-stable identity.
 
@@ -73,7 +81,7 @@ class BossClient:
 
     def __init__(
         self,
-        credential: object | None = None,
+        credential: Credential | None = None,
         timeout: float = 30.0,
         request_delay: float = 1.0,
         max_retries: int = 3,
@@ -203,13 +211,24 @@ class BossClient:
             headers["Referer"] = f"{BASE_URL}/web/chat/search"
         elif url in (BOSS_VIEW_GEEK_URL, BOSS_SEND_MSG_URL):
             headers["Referer"] = WEB_BOSS_CHAT_URL
-        elif url in (BOSS_FRIEND_LIST_URL, BOSS_FRIEND_DETAIL_URL, BOSS_LAST_MSG_URL,
-                      BOSS_HISTORY_MSG_URL, BOSS_CHAT_GEEK_INFO_URL, BOSS_FRIEND_LABELS_URL,
-                      BOSS_FRIEND_NOTE_URL, BOSS_GREET_SORT_LIST_URL, BOSS_GREET_REC_SORT_URL,
-                      BOSS_CHATTED_JOB_LIST_URL, BOSS_INTERVIEW_LIST_URL,
-                      BOSS_EXCHANGE_REQUEST_URL, BOSS_EXCHANGE_CONTENT_URL,
-                      BOSS_INTERVIEW_INVITE_URL, BOSS_REMOVE_FILTER_URL,
-                      BOSS_SESSION_ENTER_URL):
+        elif url in (
+            BOSS_FRIEND_LIST_URL,
+            BOSS_FRIEND_DETAIL_URL,
+            BOSS_LAST_MSG_URL,
+            BOSS_HISTORY_MSG_URL,
+            BOSS_CHAT_GEEK_INFO_URL,
+            BOSS_FRIEND_LABELS_URL,
+            BOSS_FRIEND_NOTE_URL,
+            BOSS_GREET_SORT_LIST_URL,
+            BOSS_GREET_REC_SORT_URL,
+            BOSS_CHATTED_JOB_LIST_URL,
+            BOSS_INTERVIEW_LIST_URL,
+            BOSS_EXCHANGE_REQUEST_URL,
+            BOSS_EXCHANGE_CONTENT_URL,
+            BOSS_INTERVIEW_INVITE_URL,
+            BOSS_REMOVE_FILTER_URL,
+            BOSS_SESSION_ENTER_URL,
+        ):
             headers["Referer"] = WEB_BOSS_CHAT_URL
         return headers
 
@@ -231,7 +250,8 @@ class BossClient:
                 f"{action}: 请求被安全系统拦截 (code={code})。"
                 "此操作需要浏览器环境的安全验证，CLI 暂不支持。"
                 "请在 BOSS直聘 网页端完成此操作。",
-                code=code, response=data,
+                code=code,
+                response=data,
             )
         if code == 9:
             # Rate limited — auto-cooldown with exponential backoff
@@ -240,7 +260,9 @@ class BossClient:
             self._request_delay = max(self._request_delay, self._base_request_delay * 2)
             logger.warning(
                 "Rate limited (count=%d), cooling down %.0fs, delay raised to %.1fs",
-                self._rate_limit_count, cooldown, self._request_delay,
+                self._rate_limit_count,
+                cooldown,
+                self._request_delay,
             )
             time.sleep(cooldown)
             raise RateLimitError()
@@ -269,15 +291,23 @@ class BossClient:
 
                 logger.info(
                     "[#%d] %s %s → %d (%.2fs)",
-                    self._request_count, method, url[:60], resp.status_code, elapsed,
+                    self._request_count,
+                    method,
+                    url[:60],
+                    resp.status_code,
+                    elapsed,
                 )
 
                 # Retry on server errors
                 if resp.status_code in (429, 500, 502, 503, 504):
-                    wait = (2 ** attempt) + random.uniform(0, 1)
+                    wait = (2**attempt) + random.uniform(0, 1)
                     logger.warning(
                         "HTTP %d from %s, retrying in %.1fs (attempt %d/%d)",
-                        resp.status_code, url[:80], wait, attempt + 1, self._max_retries,
+                        resp.status_code,
+                        url[:80],
+                        wait,
+                        attempt + 1,
+                        self._max_retries,
                     )
                     time.sleep(wait)
                     continue
@@ -295,18 +325,24 @@ class BossClient:
                 # Check for HTML responses (redirect to login page)
                 text = resp.text
                 if text.startswith("<"):
-                    raise BossApiError(f"Received HTML instead of JSON from {url} (possible auth redirect)")
+                    raise SessionExpiredError(f"Received an authentication redirect from {url}")
 
                 return resp.json()
 
             except (httpx.TimeoutException, httpx.NetworkError) as exc:
                 elapsed = time.time() - t0
                 last_exc = exc
-                wait = (2 ** attempt) + random.uniform(0, 1)
+                wait = (2**attempt) + random.uniform(0, 1)
                 logger.warning(
                     "[#%d] %s %s → Network error: %s (%.2fs), retrying in %.1fs (attempt %d/%d)",
-                    self._request_count + 1, method, url[:60], exc, elapsed, wait,
-                    attempt + 1, self._max_retries,
+                    self._request_count + 1,
+                    method,
+                    url[:60],
+                    exc,
+                    elapsed,
+                    wait,
+                    attempt + 1,
+                    self._max_retries,
                 )
                 time.sleep(wait)
 
@@ -473,7 +509,7 @@ class BossClient:
 
     def get_boss_chatted_jobs(self) -> list[dict[str, Any]]:
         """Get list of jobs the boss has posted (chatted job list)."""
-        return self._get(BOSS_CHATTED_JOB_LIST_URL, action="招聘职位列表")
+        return _require_object_list(self._get(BOSS_CHATTED_JOB_LIST_URL, action="招聘职位列表"), "招聘职位列表")
 
     def get_boss_friend_list(self, label_id: int = 0, enc_job_id: str = "", sort: str = "", page: int = 1) -> dict[str, Any]:
         """Get boss friend list (candidates who have chatted)."""
@@ -492,7 +528,10 @@ class BossClient:
     def get_boss_last_messages(self, friend_ids: list[int], src: int = 0) -> list[dict[str, Any]]:
         """Get last message for each friend."""
         ids_str = ",".join(str(fid) for fid in friend_ids)
-        return self._post(BOSS_LAST_MSG_URL, data={"friendIds": ids_str, "src": src}, action="最近消息")
+        return _require_object_list(
+            self._post(BOSS_LAST_MSG_URL, data={"friendIds": ids_str, "src": src}, action="最近消息"),
+            "最近消息",
+        )
 
     def get_boss_chat_history(self, gid: int, count: int = 20, max_msg_id: int = 0) -> dict[str, Any]:
         """Get chat history with a specific candidate."""
@@ -502,7 +541,10 @@ class BossClient:
         return self._get(BOSS_HISTORY_MSG_URL, params=params, action="聊天记录")
 
     def get_boss_chat_geek_info(
-        self, encrypt_geek_id: str, security_id: str, job_id: int,
+        self,
+        encrypt_geek_id: str,
+        security_id: str,
+        job_id: int,
     ) -> dict[str, Any]:
         """Get detailed info for a candidate in chat context."""
         return self._get(
@@ -534,13 +576,20 @@ class BossClient:
         return self._get(BOSS_INTERVIEW_LIST_URL, action="面试列表")
 
     def search_geeks(
-        self, query: str, city: str = "101020100", page: int = 1,
-        experience: str | None = None, degree: str | None = None,
-        salary: str | None = None, encrypt_job_id: str = "",
+        self,
+        query: str,
+        city: str = "101020100",
+        page: int = 1,
+        experience: str | None = None,
+        degree: str | None = None,
+        salary: str | None = None,
+        encrypt_job_id: str = "",
     ) -> dict[str, Any]:
         """Search candidates (geeks) as a recruiter."""
         params: dict[str, Any] = {
-            "query": query, "city": city, "page": page,
+            "query": query,
+            "city": city,
+            "page": page,
         }
         if encrypt_job_id:
             params["encryptJobId"] = encrypt_job_id
@@ -560,7 +609,10 @@ class BossClient:
         return self._get(BOSS_GREET_REC_SORT_URL, params=params, action="推荐候选人")
 
     def get_boss_view_geek(
-        self, encrypt_geek_id: str, encrypt_job_id: str, security_id: str = "",
+        self,
+        encrypt_geek_id: str,
+        encrypt_job_id: str,
+        security_id: str = "",
     ) -> dict[str, Any]:
         """Get full candidate resume/profile view."""
         params: dict[str, Any] = {
@@ -609,8 +661,13 @@ class BossClient:
         )
 
     def boss_interview_invite(
-        self, encrypt_geek_id: str, encrypt_job_id: str, security_id: str,
-        address: str = "", start_time: str = "", description: str = "",
+        self,
+        encrypt_geek_id: str,
+        encrypt_job_id: str,
+        security_id: str,
+        address: str = "",
+        start_time: str = "",
+        description: str = "",
     ) -> dict[str, Any]:
         """Invite candidate for an interview."""
         data: dict[str, Any] = {
@@ -644,6 +701,7 @@ class BossClient:
 
 
 # ── City resolution ─────────────────────────────────────────────────
+
 
 def resolve_city(name: str) -> str:
     """Resolve city name to code, passthrough if already a code."""

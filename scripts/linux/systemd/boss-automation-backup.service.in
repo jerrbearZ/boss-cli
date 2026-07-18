@@ -1,0 +1,21 @@
+[Unit]
+Description=Boss recruiting automation SQLite backup
+
+[Service]
+Type=oneshot
+Environment=@XDG_CONFIG_ENV@
+Environment=@XDG_DATA_ENV@
+Environment=@XDG_STATE_ENV@
+Environment=@XDG_CACHE_ENV@
+ExecStart=@BACKUP_SCRIPT@ --app-root @APP_ROOT@ --uv @UV@ --kind daily
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=@DATA_ROOT@
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX

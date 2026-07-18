@@ -151,11 +151,7 @@ def normalize_candidate(
     uid = int(detail.get("uid") or friend_id or 0) or None
     name = str(detail.get("name") or detail.get("geekName") or "")
     preview = extract_message_text(last_message or {})
-    fingerprint = (
-        normalize_message(last_message or {}, direction=message_direction_value).get("fingerprint")
-        if last_message
-        else None
-    )
+    fingerprint = normalize_message(last_message or {}, direction=message_direction_value).get("fingerprint") if last_message else None
     last_time = extract_message_time(last_message or {}) or detail.get("lastTime")
 
     return {
@@ -190,13 +186,7 @@ def normalize_message(
     text = extract_message_text(message)
     sent_at = extract_message_time(message)
     info = message.get("lastMsgInfo", {}) if isinstance(message.get("lastMsgInfo"), dict) else {}
-    boss_msg_id = (
-        message.get("msgId")
-        or message.get("messageId")
-        or message.get("mid")
-        or info.get("msgId")
-        or info.get("messageId")
-    )
+    boss_msg_id = message.get("msgId") or message.get("messageId") or message.get("mid") or info.get("msgId") or info.get("messageId")
     msg_type = str(message.get("type") or info.get("type") or info.get("msgType") or "")
     content_kind = message_content_kind(message, text=text, msg_type=msg_type)
     fingerprint = message_fingerprint(
@@ -314,13 +304,7 @@ def extract_message_time(message: dict[str, Any]) -> str:
     if not isinstance(message, dict):
         return ""
     info = message.get("lastMsgInfo", {}) if isinstance(message.get("lastMsgInfo"), dict) else {}
-    timestamp = (
-        info.get("msgTime")
-        or message.get("lastTS")
-        or message.get("msgTime")
-        or info.get("timestamp")
-        or message.get("timestamp")
-    )
+    timestamp = info.get("msgTime") or message.get("lastTS") or message.get("msgTime") or info.get("timestamp") or message.get("timestamp")
     parsed = _timestamp_to_utc_iso(timestamp)
     if parsed:
         return parsed

@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Boss recruiting automation SQLite backup
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+RandomizedDelaySec=5m
+Unit=boss-automation-backup.service
+
+[Install]
+WantedBy=timers.target

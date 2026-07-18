@@ -13,11 +13,12 @@ import logging
 import time
 from typing import Any
 
-from .constants import CONFIG_DIR
+from .platform import PATHS, ensure_private_directory, ensure_private_file
 
 logger = logging.getLogger(__name__)
 
-INDEX_CACHE_FILE = CONFIG_DIR / "index_cache.json"
+CONFIG_DIR = PATHS.config_dir  # Backward-compatible public constant.
+INDEX_CACHE_FILE = PATHS.index_cache_file
 
 
 def save_index(jobs: list[dict[str, Any]], source: str = "search") -> None:
@@ -29,7 +30,7 @@ def save_index(jobs: list[dict[str, Any]], source: str = "search") -> None:
     if not jobs:
         return
 
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_private_directory(INDEX_CACHE_FILE.parent)
 
     entries = []
     for job in jobs:
@@ -56,7 +57,7 @@ def save_index(jobs: list[dict[str, Any]], source: str = "search") -> None:
     }
 
     INDEX_CACHE_FILE.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-    INDEX_CACHE_FILE.chmod(0o600)
+    ensure_private_file(INDEX_CACHE_FILE)
     logger.debug("Saved index cache with %d entries from %s", len(entries), source)
 
 

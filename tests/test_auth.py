@@ -31,8 +31,7 @@ class TestDiagnoseExtractionIssues:
         from boss_cli.auth import _diagnose_extraction_issues
 
         diagnostics = ["chrome: Could not get key for cookie decryption"]
-        with patch("boss_cli.auth.sys") as mock_sys, \
-             patch.dict(os.environ, {}, clear=False):
+        with patch("boss_cli.auth.sys") as mock_sys, patch.dict(os.environ, {}, clear=False):
             mock_sys.platform = "darwin"
             # Remove SSH vars
             for key in ("SSH_CLIENT", "SSH_TTY", "SSH_CONNECTION"):
@@ -47,8 +46,7 @@ class TestDiagnoseExtractionIssues:
         from boss_cli.auth import _diagnose_extraction_issues
 
         diagnostics = ["chrome: safe storage key error"]
-        with patch("boss_cli.auth.sys") as mock_sys, \
-             patch.dict(os.environ, {"SSH_CLIENT": "1.2.3.4 12345 22"}):
+        with patch("boss_cli.auth.sys") as mock_sys, patch.dict(os.environ, {"SSH_CLIENT": "1.2.3.4 12345 22"}):
             mock_sys.platform = "darwin"
             hint = _diagnose_extraction_issues(diagnostics)
 
@@ -78,7 +76,28 @@ class TestDiagnoseExtractionIssues:
     def test_diagnose_empty_diagnostics(self):
         """Empty diagnostics list should return None."""
         from boss_cli.auth import _diagnose_extraction_issues
+
         assert _diagnose_extraction_issues([]) is None
+
+
+def test_linux_chrome_profile_discovery_uses_xdg_config_home(tmp_path):
+    from boss_cli.auth import _iter_chrome_cookie_files
+
+    cookie_file = tmp_path / "google-chrome" / "Default" / "Cookies"
+    cookie_file.parent.mkdir(parents=True)
+    cookie_file.touch()
+
+    with (
+        patch("boss_cli.auth.sys.platform", "linux"),
+        patch.dict(
+            os.environ,
+            {"XDG_CONFIG_HOME": str(tmp_path)},
+            clear=False,
+        ),
+    ):
+        paths = _iter_chrome_cookie_files("chrome")
+
+    assert paths == [str(cookie_file)]
 
 
 # ── Environment variable fallback ───────────────────────────────────
@@ -154,6 +173,7 @@ class TestExtractCookiesFromJar:
 
     def test_returns_none_for_empty_jar(self):
         from boss_cli.auth import _extract_cookies_from_jar
+
         assert _extract_cookies_from_jar([], source="test") is None
 
 
@@ -165,11 +185,13 @@ class TestBrowserOrder:
 
     def test_default_order(self):
         from boss_cli.auth import _get_browser_order
+
         order = _get_browser_order()
         assert order == ["chrome", "edge", "firefox", "brave"]
 
     def test_custom_source_prioritized(self):
         from boss_cli.auth import _get_browser_order
+
         order = _get_browser_order("firefox")
         assert order[0] == "firefox"
         assert "chrome" in order
@@ -206,10 +228,11 @@ class TestExtractInProcess:
         mock_bc3.edge.return_value = []
         mock_bc3.brave.return_value = []
 
-        with patch.dict("sys.modules", {"browser_cookie3": mock_bc3}), \
-             patch("boss_cli.auth._iter_chrome_cookie_files", return_value=[]):
+        with patch.dict("sys.modules", {"browser_cookie3": mock_bc3}), patch("boss_cli.auth._iter_chrome_cookie_files", return_value=[]):
             cred, diag = _extract_in_process()
 
         assert cred is not None
         assert cred.cookies["wt2"] == "test_val"
+
+
 """Tests for boss_cli.auth — diagnostics, env fallback, and extraction."""

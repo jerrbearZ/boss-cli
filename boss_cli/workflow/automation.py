@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -9,6 +10,7 @@ from threading import Event
 from typing import Any, Callable
 
 from ..auth import Credential
+from ..exceptions import error_code_for_exception
 from .db import WorkflowStore, utc_now
 from .planner import enqueue_selected_candidates
 from .poller import sync_inbox
@@ -16,6 +18,8 @@ from .reader import BossReadGateway
 from .redaction import stable_json_hash
 from .selector import PROMPT_VERSION, TemplateSelection, TemplateSelectionError, TemplateSelector
 from .sender import MessagePreflightFunc, MessageSendFunc, WechatSendFunc, send_queued_actions
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -102,8 +106,13 @@ def run_automation_cycle(
         "paused": False,
         "live": config.live,
         "target_friend_id": config.target_friend_id,
+        "stopped": False,
     }
     try:
+        if stop_requested and stop_requested():
+            summary["stopped"] = True
+            store.finish_run(run_id, status="stopped", stop_reason="stop_requested", summary=summary)
+            return {"run_id": run_id, "status": "stopped", **summary}
         sync = sync_inbox(
             store,
             client,
@@ -119,6 +128,10 @@ def run_automation_cycle(
         summary["account_id"] = account_id
         summary["synced"] = int(sync.get("messages_inserted") or 0)
         store.attach_run_account(run_id, account_id)
+
+        operator_required = store.get_operator_required()
+        if operator_required and operator_required.get("code") == "not_authenticated":
+            store.clear_operator_required(daemon_name=config.daemon_name)
 
         if store.is_paused():
             summary["paused"] = True
@@ -171,6 +184,7 @@ def run_automation_cycle(
             summary["eligible"] = len(candidates)
             for candidate in candidates:
                 if stop_requested and stop_requested():
+                    summary["stopped"] = True
                     break
                 candidate_id = int(candidate["id"])
                 trigger_fingerprint = str(candidate["trigger_fingerprint"])
@@ -245,9 +259,13 @@ def run_automation_cycle(
             summary["sent"] = int(send_summary.get("messages_verified") or 0)
             summary["wechat_verified"] = int(send_summary.get("wechat_verified") or 0)
             summary["send"] = send_summary
+            if send_summary.get("stop_reason") == "browser_login_required":
+                store.set_setting("paused", {"paused": True, "reason": "authentication_failure"})
+                store.set_operator_required("not_authenticated", daemon_name=config.daemon_name)
+                cycle_status = "authentication_failure"
 
-        status = cycle_status
-        if send_summary and send_summary.get("stopped"):
+        status = "stopped" if summary["stopped"] else cycle_status
+        if send_summary and send_summary.get("stopped") and status not in {"authentication_failure", "stopped"}:
             status = "needs_review"
         store.append_event(
             run_id=run_id,
@@ -259,6 +277,14 @@ def run_automation_cycle(
             details=summary,
         )
         store.finish_run(run_id, status=status, summary=summary)
+        logger.info(
+            "automation_cycle run_id=%s status=%s eligible=%d sent=%d wechat_verified=%d",
+            run_id,
+            status,
+            summary["eligible"],
+            summary["sent"],
+            summary["wechat_verified"],
+        )
         return {"run_id": run_id, "status": status, **summary}
     except Exception as exc:
         summary["errors"] += 1
@@ -284,6 +310,8 @@ def run_daemon(
     """Own the daemon lease and run cycles until stopped."""
     stop = stop_event or Event()
     owner = owner_id or uuid.uuid4().hex
+    if store.is_daemon_stop_requested(config.daemon_name):
+        return {"cycles": 0, "failures": 0, "last_result": None, "stop_reason": "durable_stop_requested"}
     if not store.claim_daemon(
         daemon_name=config.daemon_name,
         owner_id=owner,
@@ -295,9 +323,16 @@ def run_daemon(
     cycles = 0
     failures = 0
     last_result: dict[str, Any] | None = None
+    final_status = "stopped"
+    stop_reason = "stop_requested"
+
+    def _should_stop() -> bool:
+        return stop.is_set() or store.is_daemon_stop_requested(config.daemon_name)
+
     try:
-        while not stop.is_set():
+        while not _should_stop():
             started_at = utc_now()
+            authentication_failure = False
             try:
                 last_result = cycle_runner()
                 cycles += 1
@@ -305,13 +340,25 @@ def run_daemon(
                 cycle_status = str(last_result.get("status") or "completed")
                 error_code = None
                 error_message = None
+                if cycle_status == "authentication_failure":
+                    authentication_failure = True
+                    final_status = "authentication_failure"
+                    stop_reason = "not_authenticated"
             except Exception as exc:  # noqa: BLE001 - daemon must persist failure and continue.
                 failures += 1
                 wait_seconds = config.error_backoff_seconds
                 cycle_status = "failed"
-                error_code = type(exc).__name__
-                error_message = str(exc)
+                mapped_code = error_code_for_exception(exc)
+                error_code = mapped_code if mapped_code != "unknown_error" else type(exc).__name__
+                error_message = type(exc).__name__
                 last_result = {"status": "failed", "error_code": error_code}
+                logger.error("automation_cycle status=failed error_code=%s", error_code)
+                if error_code == "not_authenticated":
+                    authentication_failure = True
+                    final_status = "authentication_failure"
+                    stop_reason = "not_authenticated"
+                    store.set_setting("paused", {"paused": True, "reason": "authentication_failure"})
+                    store.set_operator_required("not_authenticated", daemon_name=config.daemon_name)
 
             finished_at = utc_now()
             next_poll_at = None if once else _after_seconds(wait_seconds)
@@ -331,11 +378,17 @@ def run_daemon(
             )
             if once:
                 break
-            stop.wait(max(wait_seconds, 0))
+            if authentication_failure:
+                break
+            remaining = max(wait_seconds, 0)
+            while remaining > 0 and not _should_stop():
+                interval = min(1.0, remaining)
+                stop.wait(interval)
+                remaining -= interval
     finally:
-        store.release_daemon(daemon_name=config.daemon_name, owner_id=owner)
+        store.release_daemon(daemon_name=config.daemon_name, owner_id=owner, status=final_status)
 
-    return {"cycles": cycles, "failures": failures, "last_result": last_result}
+    return {"cycles": cycles, "failures": failures, "last_result": last_result, "stop_reason": stop_reason}
 
 
 def _safe_select(

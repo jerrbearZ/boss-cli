@@ -104,9 +104,7 @@ def install_automotive_wechat_templates(
             existing = store.get_template_version(name=template.name, version=CATALOG_VERSION)
             if existing is not None:
                 if existing["body"] != template.body or existing["selection_guidance"] != template.selection_guidance:
-                    raise ValueError(
-                        f"Template {template.name}:{CATALOG_VERSION} differs from the immutable catalog"
-                    )
+                    raise ValueError(f"Template {template.name}:{CATALOG_VERSION} differs from the immutable catalog")
                 template_id = int(existing["id"])
                 if not existing["approved"] or not existing["active"] or existing["retired_at"] is not None:
                     store.set_template_approval(template_id, approved=True, approved_by=approved_by)

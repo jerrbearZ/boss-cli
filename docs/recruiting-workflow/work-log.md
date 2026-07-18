@@ -1,5 +1,96 @@
 # Work Log
 
+## 2026-07-17: Linux Quality Audit And Native User-Systemd Deployment
+
+### Process
+
+- Audited the application, workflow engine, platform paths, secret handling, dashboard boundary, migrations,
+  dependency lock, tests, packaging, typing, and existing Windows deployment before adding Linux supervision.
+- Fixed inconsistent Python formatting, a terminal-dependent assertion, Windows-only migration backups,
+  Linux browser-profile paths, dynamic endpoint shape validation, and POSIX file/directory permissions.
+- Hardened localhost dashboard writes with exact Host/Origin checks, JSON-only bounded request bodies, static
+  path containment, restrictive security headers, and regression coverage.
+- Added XDG-aware Linux paths, a current-user Secret Service envelope, and a dry-by-default Ubuntu 24.04 x86_64
+  deployment using hardened graphical-session `systemd --user` services and a persistent backup timer.
+- Added idempotent install, secret setup, start, graceful stop, status, backup, restore, pinned update/rollback,
+  uninstall, runtime validation, unit rendering, CI validation, and operator documentation.
+- Replaced Camoufox's floating browser/add-on fetch with exact Camoufox and Playwright package pins, a
+  per-platform release manifest, archive size/SHA-256 verification, atomic installation, and a real context smoke
+  test; the unneeded floating default add-on is disabled.
+
+### Results
+
+- Linux credentials are no longer persisted as plaintext by the supported deployment; secrets remain in the
+  unlocked desktop user's keyring and are absent from units, environment files, SQLite, and logs.
+- The daemon, dashboard, and backup service run with a read-only host filesystem, narrow explicit writable XDG
+  roots, `UMask=0077`, no privilege gain, frozen/no-sync runtime dependencies, and bounded restart/stop behavior.
+- Install and update always leave automation dry. A forced stop quarantines uncertain in-flight sends for
+  review instead of replaying them.
+- The repository deployment is ready for dry commissioning on the target PC, but it is not production-certified
+  until native systemd/keyring/browser behavior, a controlled canary, recovery drill, and 24-hour soak pass.
+
+### Verification
+
+- Python 3.13 non-live suite: `243 passed, 2 skipped, 7 deselected`.
+- Ruff lint and format checks passed across 63 Python files; project-wide Pyright passed with zero errors.
+- Locked dependency audit reported no known third-party vulnerabilities; high-severity Bandit scan passed.
+- Bash syntax and ShellCheck passed for every Linux script; unit rendering safely handled spaces, Unicode, and
+  systemd percent escaping.
+- Wheel/source builds passed and contain the required migrations/static assets and Linux deployment scripts.
+- Offline line coverage is 56% overall; core state/automation modules are mostly 76-94%, while live browser/API
+  commands remain the largest integration-test gap.
+
+### Design Notes And Next Steps
+
+- The supported target is a dedicated non-root Ubuntu desktop user, not a root service, container, logged-out
+  session, or SSH-only host, because browser automation and Secret Service require the unlocked graphical user.
+- Native Linux `systemd-analyze`, Secret Service, Camoufox, reboot/session behavior, and live BOSS effects cannot
+  be certified from the development Mac; the Linux CI and physical-PC acceptance gates remain mandatory.
+- Require green Linux/Windows CI on a pinned commit, then follow the Linux runbook through dry cycles, reboot and
+  failure recovery, isolated live canary, restore drill, and supervised soak before enabling production live mode.
+
+## 2026-07-15: Native Windows Deployment Implementation
+
+### Process
+
+- Reviewed the approved Windows deployment blueprint against the existing schema 5 daemon, CLI, authentication,
+  dashboard, SQLite queue, tests, and CI.
+- Preserved the validated macOS/Linux config and data defaults while adding `%LOCALAPPDATA%\BossCLI` routing and
+  a platform-aware Windows/Linux/macOS API identity.
+- Added one versioned current-user DPAPI envelope for Alibaba and BOSS secrets, hidden-input secret commands, and
+  explicit validated migration of a legacy plaintext Windows credential.
+- Added schema 6 durable stop/operator state, authentication-failure pause behavior, health exit codes, uncertain
+  send recovery, interruptible delays, rotating redacted logs, online backup, guarded restore, and deployment
+  diagnostics.
+- Added validated dry-by-default deployment JSON, separate live enablement, idempotent Task Scheduler scripts,
+  Windows CI, a PowerShell validation path, and an operator/recovery runbook.
+
+### Results
+
+- Windows daemon and dashboard tasks are independently launchable at interactive logon with least privilege,
+  `IgnoreNew`, restart controls, absolute paths, and a localhost-only dashboard.
+- Secrets are absent from task arguments and non-secret config; process environment values remain explicit
+  non-persisted overrides.
+- A forced exit cannot automatically replay a `sending` action; lease takeover changes it to `needs_review`.
+- Install and update always start dry. Live mode requires the explicit `boss deployment enable-live` command.
+- Target-PC commissioning, a live BOSS canary, session-state evidence, and the 24-hour soak remain external gates.
+
+### Verification
+
+- `uv sync --locked --all-extras` completed on Python 3.13.
+- `uv run ruff check .` passed.
+- `uv run python -m pytest -p no:capture -q -m 'not smoke'` passed with `221 passed, 1 skipped, 7 deselected`;
+  the skipped test is the real Windows DPAPI round trip and runs in Windows CI.
+- Native PowerShell was unavailable on the development Mac; Windows CI parses every script and runs each
+  validation-only entry point.
+
+### Design Notes And Next Steps
+
+- DPAPI deliberately excludes `CRYPTPROTECT_LOCAL_MACHINE`; disaster recovery requires re-entering secrets.
+- Task Scheduler is used instead of a service because Camoufox requires an interactive desktop.
+- Complete phases 5–6 from the Windows plan on the physical PC and record diagnostics, canary IDs, restore drill,
+  proven console/lock/RDP state, and soak outcome before certification.
+
 ## 2026-07-15: Full Current-Inbox Live Run
 
 ### Process

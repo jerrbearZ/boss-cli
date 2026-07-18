@@ -50,6 +50,7 @@ def run_client_action(credential: Credential, action: Callable[[BossClient], T])
     except SessionExpiredError:
         # Try refreshing from browser
         from ..auth import clear_credential, extract_browser_credential
+
         fresh, _ = extract_browser_credential()
         if fresh:
             with get_client(fresh) as client:
@@ -80,6 +81,7 @@ def _output_structured(data: Any, *, as_json: bool, as_yaml: bool) -> None:
     elif as_yaml or not sys.stdout.isatty():
         try:
             import yaml
+
             click.echo(yaml.dump(envelope, allow_unicode=True, default_flow_style=False))
         except ImportError:
             click.echo(json.dumps(envelope, indent=2, ensure_ascii=False))
@@ -142,6 +144,7 @@ def _print_error(exc: BossApiError, *, as_json: bool = False, as_yaml: bool = Fa
         else:
             try:
                 import yaml
+
                 click.echo(yaml.dump(envelope, allow_unicode=True, default_flow_style=False))
             except ImportError:
                 click.echo(json.dumps(envelope, indent=2, ensure_ascii=False))

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from ..auth import Credential
 from ..browser_reply import (
+    BrowserEngine,
     BrowserReplyError,
     BrowserReplyResult,
     BrowserReplyTarget,
@@ -21,6 +23,8 @@ from .models import EXCHANGE_WECHAT, SEND_MESSAGE
 from .normalizer import message_fingerprint
 from .redaction import redact_text, sha256_text
 
+logger = logging.getLogger(__name__)
+
 StopCheck = Callable[[], bool]
 MessageSendFunc = Callable[[Credential, BrowserReplyTarget, str], BrowserReplyResult]
 WechatSendFunc = Callable[[Credential, BrowserReplyTarget], BrowserWechatResult]
@@ -33,6 +37,7 @@ _RETRYABLE_CODES = {
     "browser_chat_not_ready",
     "browser_ws_not_connected",
     "browser_target_not_visible",
+    "browser_login_required",
 }
 
 
@@ -41,7 +46,7 @@ def send_queued_actions(
     credential: Credential,
     *,
     max_actions: int = 5,
-    engine: str = "camoufox",
+    engine: BrowserEngine = "camoufox",
     stop_requested: StopCheck | None = None,
     delay_seconds: float = 1.0,
     send_func: MessageSendFunc | None = None,
@@ -90,6 +95,7 @@ def send_queued_actions(
                 break
             summary["claimed"] += 1
             action_id = int(action["id"])
+            logger.info("outbound_action run_id=%s action_id=%d status=claimed", run_id, action_id)
             context = store.get_action_context(action_id)
             if not context:
                 _fail_action(
@@ -170,10 +176,27 @@ def send_queued_actions(
                 break
 
             if delay_seconds > 0:
-                time.sleep(delay_seconds)
+                remaining = delay_seconds
+                while remaining > 0:
+                    if (stop_requested and stop_requested()) or store.is_paused():
+                        summary["stopped"] = True
+                        stop_reason = "stop_requested" if stop_requested and stop_requested() else "paused"
+                        break
+                    interval = min(1.0, remaining)
+                    time.sleep(interval)
+                    remaining -= interval
+                if summary["stopped"]:
+                    break
 
         status = "stopped" if summary["stopped"] else "completed"
         store.finish_run(run_id, status=status, stop_reason=stop_reason, summary=summary)
+        logger.info(
+            "send_run run_id=%s status=%s verified=%d stop_reason=%s",
+            run_id,
+            status,
+            summary["verified"],
+            stop_reason or "none",
+        )
         return {"run_id": run_id, "stop_reason": stop_reason, **summary}
     except Exception as exc:
         store.finish_run(run_id, status="failed", stop_reason=type(exc).__name__, summary=summary)
@@ -317,6 +340,7 @@ def _fail_action(
     )
     status = "failed_retryable" if retryable else "failed_terminal"
     summary[status] += 1
+    logger.error("outbound_action action_id=%d status=%s error_code=%s", action_id, status, redact_text(code))
     store.append_event(
         event_type="send_failed",
         severity="error",
@@ -325,16 +349,16 @@ def _fail_action(
     )
 
 
-def _message_sender(engine: str) -> MessageSendFunc:
+def _message_sender(engine: BrowserEngine) -> MessageSendFunc:
     def _send(credential: Credential, target: BrowserReplyTarget, body: str) -> BrowserReplyResult:
-        return send_boss_message_via_browser(credential, target, body, engine=engine)  # type: ignore[arg-type]
+        return send_boss_message_via_browser(credential, target, body, engine=engine)
 
     return _send
 
 
-def _wechat_sender(engine: str) -> WechatSendFunc:
+def _wechat_sender(engine: BrowserEngine) -> WechatSendFunc:
     def _send(credential: Credential, target: BrowserReplyTarget) -> BrowserWechatResult:
-        return request_wechat_via_browser(credential, target, engine=engine)  # type: ignore[arg-type]
+        return request_wechat_via_browser(credential, target, engine=engine)
 
     return _send
 
@@ -349,7 +373,8 @@ def _latest_message_matches(credential: Credential, target: BrowserReplyTarget, 
         uid = int(row.get("uid") or row.get("friendId") or 0)
         if uid not in {0, target.friend_id}:
             continue
-        info = row.get("lastMsgInfo") if isinstance(row.get("lastMsgInfo"), dict) else {}
+        raw_info = row.get("lastMsgInfo")
+        info: dict[str, Any] = raw_info if isinstance(raw_info, dict) else {}
         text = str(info.get("showText") or info.get("text") or row.get("showText") or row.get("text") or "")
         return text == body or body in text
     return False

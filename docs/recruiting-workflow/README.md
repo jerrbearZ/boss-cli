@@ -42,8 +42,11 @@ It does not:
 - [dashboard-design.md](./dashboard-design.md): Operator dashboard design for controlled sending and audit monitoring.
 - [reader-architecture.md](./reader-architecture.md): Current incremental reader behavior, privacy boundaries, and recovery model.
 - [automation-dashboard.md](./automation-dashboard.md): Typed batch messages, WeChat exchange execution, dashboard flow, and recovery behavior.
-- [continuous-automation.md](./continuous-automation.md): Authoritative schema v5 daemon design, safety decisions, operations, and recovery.
-- [windows-deployment-plan.md](./windows-deployment-plan.md): Planned native Windows architecture, supervision, secrets, testing, rollout, and rollback.
+- [continuous-automation.md](./continuous-automation.md): Core continuous daemon design, safety decisions, operations, and recovery.
+- [windows-deployment-plan.md](./windows-deployment-plan.md): Native Windows architecture, implementation phases, acceptance, rollout, and rollback.
+- [windows-operator-runbook.md](./windows-operator-runbook.md): Install, operate, update, restore, diagnose, and certify the Windows deployment.
+- [linux-deployment-plan.md](./linux-deployment-plan.md): Native Ubuntu architecture, quality gate, acceptance, rollout, and rollback.
+- [linux-operator-runbook.md](./linux-operator-runbook.md): Install, operate, update, restore, diagnose, and certify the Linux deployment.
 - [project-evolution-visual-brief.md](./project-evolution-visual-brief.md): End-to-end project history and image-generation brief for the architecture evolution.
 - [documentation-practice.md](./documentation-practice.md): Required documentation standard for future work.
 - [work-log.md](./work-log.md): Chronological record of process, results, verification, and open gaps.

@@ -122,6 +122,7 @@ class TestProfile:
         # Must have at least one of these fields
         assert any(k in payload for k in ("name", "nickName", "account"))
 
+
 @smoke
 @pytest.mark.usefixtures("require_live_auth")
 class TestSearch:

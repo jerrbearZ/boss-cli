@@ -85,7 +85,9 @@ def greet(security_id: str, lid: str, as_json: bool, as_yaml: bool) -> None:
 @click.option("--degree", type=click.Choice(list(DEGREE_CODES.keys())), help="学历筛选")
 @click.option("--dry-run", is_flag=True, help="仅预览，不实际发送")
 @click.option("-y", "--yes", is_flag=True, help="跳过确认提示")
-def batch_greet(keyword: str, city: str, count: int, salary: str | None, exp: str | None, degree: str | None, dry_run: bool, yes: bool) -> None:
+def batch_greet(
+    keyword: str, city: str, count: int, salary: str | None, exp: str | None, degree: str | None, dry_run: bool, yes: bool
+) -> None:
     """批量向搜索结果中的 Boss 打招呼
 
     例: boss batch-greet "golang" --city 杭州 -n 10 --salary 20-30K

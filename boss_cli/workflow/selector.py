@@ -9,6 +9,7 @@ from typing import Any, Callable, Literal, Protocol
 
 import httpx
 
+from ..secrets import load_dashscope_api_key
 from .redaction import redact_text, sha256_text, stable_json_dumps
 
 PROMPT_VERSION = "qwen-template-selector-v2"
@@ -45,8 +46,7 @@ class TemplateSelector(Protocol):
     provider: str
     model: str
 
-    def select(self, context: dict[str, Any], templates: list[dict[str, Any]]) -> TemplateSelection:
-        """Choose one approved template or defer the conversation."""
+    def select(self, context: dict[str, Any], templates: list[dict[str, Any]]) -> TemplateSelection: ...
 
 
 class AlibabaQwenSelector:
@@ -63,11 +63,9 @@ class AlibabaQwenSelector:
         timeout_seconds: float = 30.0,
         post_json: PostJson | None = None,
     ) -> None:
-        self.api_key = api_key or os.environ.get("DASHSCOPE_API_KEY", "")
+        self.api_key = api_key or load_dashscope_api_key()
         self.model = model or os.environ.get("BOSS_LLM_MODEL") or DEFAULT_QWEN_MODEL
-        self.base_url = (
-            base_url or os.environ.get("DASHSCOPE_BASE_URL") or DEFAULT_DASHSCOPE_BASE_URL
-        ).rstrip("/")
+        self.base_url = (base_url or os.environ.get("DASHSCOPE_BASE_URL") or DEFAULT_DASHSCOPE_BASE_URL).rstrip("/")
         self.timeout_seconds = timeout_seconds
         self._post_json = post_json or _post_json
         if not self.api_key:

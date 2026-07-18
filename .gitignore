@@ -26,9 +26,13 @@ Thumbs.db
 
 # Testing
 .coverage
+.coverage.*
 htmlcov/
 .pytest_cache/
 .mypy_cache/
 
 # Config (DO NOT commit credentials)
 credential.json
+secrets.dpapi
+deployment.json
+workflow.db*

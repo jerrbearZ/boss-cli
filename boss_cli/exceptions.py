@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 
-
 class BossApiError(Exception):
     """Base exception for Boss Zhipin API errors."""
 

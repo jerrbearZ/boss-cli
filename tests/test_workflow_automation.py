@@ -7,7 +7,7 @@ import json
 import pytest
 
 from boss_cli.auth import Credential
-from boss_cli.browser_reply import BrowserReplyResult, BrowserWechatResult
+from boss_cli.browser_reply import BrowserReplyError, BrowserReplyResult, BrowserWechatResult
 from boss_cli.workflow import init_db
 from boss_cli.workflow.automation import AutomationConfig, run_automation_cycle, run_daemon, template_catalog_hash
 from boss_cli.workflow.selector import AlibabaQwenSelector, TemplateSelection, TemplateSelectionError
@@ -282,6 +282,28 @@ def test_live_cycle_sends_message_then_wechat(tmp_path):
         assert result["sent"] == 1
         assert result["wechat_verified"] == 1
         assert store.queue_summary()["verified"] == 2
+
+
+def test_browser_login_failure_pauses_writes_and_requires_operator(tmp_path):
+    def send_message(credential, target, body):
+        raise BrowserReplyError("login required", code="browser_login_required")
+
+    with init_db(tmp_path / "workflow.db") as store:
+        approved_template(store)
+        result = run_automation_cycle(
+            store,
+            FakeBossClient(),
+            Credential({"wt2": "test"}),
+            FixedSelector(),
+            AutomationConfig(live=True, max_actions_per_cycle=1, action_delay_seconds=0),
+            send_func=send_message,
+            message_preflight_func=lambda credential, target, body: False,
+        )
+
+        assert result["status"] == "authentication_failure"
+        assert store.is_paused()
+        assert store.get_operator_required()["code"] == "not_authenticated"
+        assert store.queue_summary()["failed_retryable"] == 1
 
 
 def test_existing_queue_drains_after_last_template_is_retired(tmp_path):

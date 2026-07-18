@@ -29,13 +29,15 @@ class FakeClient:
 
 def test_resolve_browser_reply_target_from_friend_detail():
     target = resolve_browser_reply_target(
-        FakeClient({
-            "uid": 123,
-            "friendSource": 0,
-            "encryptUid": "enc-uid",
-            "name": "candidate",
-            "jobName": "sales",
-        }),
+        FakeClient(
+            {
+                "uid": 123,
+                "friendSource": 0,
+                "encryptUid": "enc-uid",
+                "name": "candidate",
+                "jobName": "sales",
+            }
+        ),
         123,
     )
 
@@ -67,17 +69,21 @@ def test_recruiter_reply_browser_help():
 def test_recruiter_reply_browser_dry_run_does_not_send():
     mock_cred = MagicMock()
     mock_cred.cookies = {"wt2": "x"}
-    fake_client = FakeClient({
-        "uid": 123,
-        "friendSource": 0,
-        "encryptUid": "enc-uid",
-        "name": "candidate",
-        "jobName": "sales",
-    })
+    fake_client = FakeClient(
+        {
+            "uid": 123,
+            "friendSource": 0,
+            "encryptUid": "enc-uid",
+            "name": "candidate",
+            "jobName": "sales",
+        }
+    )
 
-    with patch("boss_cli.commands._common.get_credential", return_value=mock_cred), \
-         patch("boss_cli.commands.recruiter.run_client_action", side_effect=lambda cred, action: action(fake_client)), \
-         patch("boss_cli.commands.recruiter.send_boss_message_via_browser") as send:
+    with (
+        patch("boss_cli.commands._common.get_credential", return_value=mock_cred),
+        patch("boss_cli.commands.recruiter.run_client_action", side_effect=lambda cred, action: action(fake_client)),
+        patch("boss_cli.commands.recruiter.send_boss_message_via_browser") as send,
+    ):
         result = runner.invoke(cli, ["recruiter", "reply-browser", "123", "hello", "--dry-run", "--json"])
 
     assert result.exit_code == 0
@@ -92,13 +98,15 @@ def test_recruiter_reply_browser_dry_run_does_not_send():
 def test_recruiter_reply_browser_invokes_browser_adapter():
     mock_cred = MagicMock()
     mock_cred.cookies = {"wt2": "x"}
-    fake_client = FakeClient({
-        "uid": 123,
-        "friendSource": 0,
-        "encryptUid": "enc-uid",
-        "name": "candidate",
-        "jobName": "sales",
-    })
+    fake_client = FakeClient(
+        {
+            "uid": 123,
+            "friendSource": 0,
+            "encryptUid": "enc-uid",
+            "name": "candidate",
+            "jobName": "sales",
+        }
+    )
     adapter_result = BrowserReplyResult(
         ok=True,
         friend_id=123,
@@ -110,9 +118,11 @@ def test_recruiter_reply_browser_invokes_browser_adapter():
         verification={"status": "matched", "matched": True, "last_text": "hello"},
     )
 
-    with patch("boss_cli.commands._common.get_credential", return_value=mock_cred), \
-         patch("boss_cli.commands.recruiter.run_client_action", side_effect=lambda cred, action: action(fake_client)), \
-         patch("boss_cli.commands.recruiter.send_boss_message_via_browser", return_value=adapter_result) as send:
+    with (
+        patch("boss_cli.commands._common.get_credential", return_value=mock_cred),
+        patch("boss_cli.commands.recruiter.run_client_action", side_effect=lambda cred, action: action(fake_client)),
+        patch("boss_cli.commands.recruiter.send_boss_message_via_browser", return_value=adapter_result) as send,
+    ):
         result = runner.invoke(cli, ["recruiter", "reply-browser", "123", "hello", "-y", "--json"])
 
     assert result.exit_code == 0
@@ -189,9 +199,12 @@ def test_request_wechat_dom_requires_visible_success_change():
 
     page = FakePage()
     target = BrowserReplyTarget(friend_id=123, friend_source=0, encrypt_uid="enc-uid")
-    with patch("boss_cli.browser_reply._prepare_chat_page"), patch(
-        "boss_cli.browser_reply._select_target_conversation",
-        return_value=page.conversation,
+    with (
+        patch("boss_cli.browser_reply._prepare_chat_page"),
+        patch(
+            "boss_cli.browser_reply._select_target_conversation",
+            return_value=page.conversation,
+        ),
     ):
         method, verification = _request_wechat_from_page(page, target, timeout_ms=1000)
 
@@ -247,9 +260,12 @@ def test_request_wechat_dom_accepts_request_sent_wording():
 
     page = FakePage()
     target = BrowserReplyTarget(friend_id=123, friend_source=0, encrypt_uid="enc-uid")
-    with patch("boss_cli.browser_reply._prepare_chat_page"), patch(
-        "boss_cli.browser_reply._select_target_conversation",
-        return_value=page.conversation,
+    with (
+        patch("boss_cli.browser_reply._prepare_chat_page"),
+        patch(
+            "boss_cli.browser_reply._select_target_conversation",
+            return_value=page.conversation,
+        ),
     ):
         method, verification = _request_wechat_from_page(page, target, timeout_ms=1000)
 
@@ -313,9 +329,12 @@ def test_request_wechat_accepts_incoming_exchange_before_confirming():
 
     page = FakePage()
     target = BrowserReplyTarget(friend_id=123, friend_source=0, encrypt_uid="enc-uid")
-    with patch("boss_cli.browser_reply._prepare_chat_page"), patch(
-        "boss_cli.browser_reply._select_target_conversation",
-        return_value=page.conversation,
+    with (
+        patch("boss_cli.browser_reply._prepare_chat_page"),
+        patch(
+            "boss_cli.browser_reply._select_target_conversation",
+            return_value=page.conversation,
+        ),
     ):
         method, verification = _request_wechat_from_page(page, target, timeout_ms=1000)
 

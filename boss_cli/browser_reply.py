@@ -10,12 +10,16 @@ from __future__ import annotations
 
 import time
 from dataclasses import asdict, dataclass
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
+
+if TYPE_CHECKING:
+    from playwright.sync_api import Browser
 
 from .auth import Credential
 from .client import BossClient
 from .constants import WEB_BOSS_CHAT_URL
 from .exceptions import BossApiError
+from .platform import camoufox_os_name
 
 BrowserEngine = Literal["auto", "camoufox", "chrome"]
 
@@ -81,34 +85,21 @@ def resolve_browser_reply_target(client: BossClient, friend_id: int) -> BrowserR
     data = client.get_boss_friend_details([friend_id])
     friend_list = data.get("friendList", []) if isinstance(data, dict) else []
     detail = next(
-        (
-            item for item in friend_list
-            if int(item.get("uid") or item.get("friendId") or 0) == friend_id
-        ),
+        (item for item in friend_list if int(item.get("uid") or item.get("friendId") or 0) == friend_id),
         friend_list[0] if friend_list else None,
     )
     if not detail:
         raise BrowserReplyError(f"未找到 friendId={friend_id} 的候选人详情", code="target_not_found")
 
     uid = int(detail.get("uid") or detail.get("friendId") or friend_id)
-    encrypt_uid = str(
-        detail.get("encryptUid")
-        or detail.get("encryptFriendId")
-        or detail.get("encryptGeekId")
-        or ""
-    )
+    encrypt_uid = str(detail.get("encryptUid") or detail.get("encryptFriendId") or detail.get("encryptGeekId") or "")
     if not encrypt_uid:
         raise BrowserReplyError(
             f"候选人 friendId={friend_id} 缺少 encryptUid，无法通过 Boss Web 发送",
             code="target_missing_context",
         )
 
-    friend_source = int(
-        detail.get("friendSource")
-        or detail.get("source")
-        or detail.get("geekSource")
-        or 0
-    )
+    friend_source = int(detail.get("friendSource") or detail.get("source") or detail.get("geekSource") or 0)
 
     return BrowserReplyTarget(
         friend_id=uid,
@@ -283,6 +274,7 @@ def _request_wechat_once_with_engine(
 ) -> tuple[str, dict[str, Any]]:
     if engine == "camoufox":
         try:
+            from camoufox import DefaultAddons
             from camoufox.sync_api import Camoufox
         except ImportError as exc:
             raise BrowserReplyError(
@@ -290,7 +282,13 @@ def _request_wechat_once_with_engine(
                 code="browser_backend_missing",
             ) from exc
         try:
-            with Camoufox(headless=headless) as browser:
+            with Camoufox(
+                headless=headless,
+                persistent_context=False,
+                exclude_addons=[DefaultAddons.UBO],
+                os=camoufox_os_name(),
+            ) as launched:
+                browser = cast("Browser", launched)
                 context = browser.new_context(locale="zh-CN")
                 _add_cookies_to_context(context, credential)
                 return _request_wechat_from_page(context.new_page(), target, timeout_ms=timeout_ms)
@@ -341,6 +339,7 @@ def _send_with_camoufox(
     timeout_ms: int,
 ) -> str:
     try:
+        from camoufox import DefaultAddons
         from camoufox.sync_api import Camoufox
     except ImportError as exc:
         raise BrowserReplyError(
@@ -349,7 +348,13 @@ def _send_with_camoufox(
         ) from exc
 
     try:
-        with Camoufox(headless=headless) as browser:
+        with Camoufox(
+            headless=headless,
+            persistent_context=False,
+            exclude_addons=[DefaultAddons.UBO],
+            os=camoufox_os_name(),
+        ) as launched:
+            browser = cast("Browser", launched)
             context = browser.new_context(locale="zh-CN")
             _add_cookies_to_context(context, credential)
             page = context.new_page()
@@ -477,13 +482,15 @@ def _select_target_conversation(page: Any, target: BrowserReplyTarget, *, timeou
 
 def _has_browser_send_bridge(page: Any) -> bool:
     try:
-        return bool(page.evaluate(
-            """
+        return bool(
+            page.evaluate(
+                """
             () => window.iBossRoot
               && window.iBossRoot.chat
               && typeof window.iBossRoot.chat.sendMessage === 'function'
             """
-        ))
+            )
+        )
     except Exception:
         return False
 
@@ -570,9 +577,7 @@ def _send_via_dom(page: Any, target: BrowserReplyTarget, message: str, *, timeou
     if message not in typed:
         raise BrowserReplyError("输入框内容校验失败，已停止发送", code="browser_editor_verify_failed")
 
-    send_button = page.locator(".conversation-editor .submit, .conversation-editor .submit-content").filter(
-        has_text="发送"
-    ).last
+    send_button = page.locator(".conversation-editor .submit, .conversation-editor .submit-content").filter(has_text="发送").last
     try:
         send_button.wait_for(state="visible", timeout=5_000)
         send_button.click(timeout=5_000)
@@ -699,13 +704,7 @@ def _extract_latest_message(messages: Any, friend_id: int) -> dict[str, Any]:
         if int(item.get("uid") or item.get("friendId") or 0) != friend_id:
             continue
         info = item.get("lastMsgInfo") or item.get("lastMessageInfo") or {}
-        text = (
-            info.get("showText")
-            or info.get("text")
-            or item.get("lastMsg")
-            or item.get("showText")
-            or ""
-        )
+        text = info.get("showText") or info.get("text") or item.get("lastMsg") or item.get("showText") or ""
         return {
             "text": str(text),
             "last_time": item.get("lastTime") or item.get("time") or "",

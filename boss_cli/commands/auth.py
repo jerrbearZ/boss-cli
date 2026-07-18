@@ -60,6 +60,7 @@ def login(qrcode: bool, cookie_source: str | None) -> None:
         # Fallback to HTTP-only QR flow when camoufox is unavailable
         try:
             from ..browser_login import browser_qr_login, BrowserLoginUnavailable
+
             try:
                 cred = browser_qr_login()
                 _finalize_login(cred, from_qr=True)
@@ -67,7 +68,8 @@ def login(qrcode: bool, cookie_source: str | None) -> None:
             except BrowserLoginUnavailable as e:
                 console.print(
                     f"[yellow]⚠️  浏览器辅助登录不可用: {e}\n"
-                    "   安装方式: pip install 'kabi-boss-cli[browser]' && python -m camoufox fetch\n"
+                    "   安装方式: pip install 'kabi-boss-cli[browser]' && "
+                    "python -m boss_cli.camoufox_runtime install --smoke\n"
                     "   回退到 HTTP 扫码登录...[/yellow]\n"
                 )
         except ImportError:
@@ -76,6 +78,7 @@ def login(qrcode: bool, cookie_source: str | None) -> None:
         # Fallback: HTTP-only QR login
         from ..auth import qr_login
         import asyncio
+
         try:
             cred = asyncio.run(qr_login())
         except RuntimeError as e:
@@ -84,6 +87,7 @@ def login(qrcode: bool, cookie_source: str | None) -> None:
         _finalize_login(cred, from_qr=True)
     else:
         from ..auth import extract_browser_credential, _diagnose_extraction_issues
+
         # Try browser cookies first
         cred, diagnostics = extract_browser_credential(cookie_source=cookie_source)
         if cred:
@@ -102,6 +106,7 @@ def login(qrcode: bool, cookie_source: str | None) -> None:
             console.print("[dim]💡 也可以手动设置 BOSS_COOKIES 环境变量来注入 cookie[/dim]")
             try:
                 from ..browser_login import browser_qr_login, BrowserLoginUnavailable
+
                 try:
                     cred = browser_qr_login()
                     _finalize_login(cred, from_qr=True)
@@ -113,6 +118,7 @@ def login(qrcode: bool, cookie_source: str | None) -> None:
 
             from ..auth import qr_login
             import asyncio
+
             try:
                 cred = asyncio.run(qr_login())
             except RuntimeError as e:
@@ -125,6 +131,7 @@ def login(qrcode: bool, cookie_source: str | None) -> None:
 def logout() -> None:
     """清除已保存的登录凭证"""
     from ..auth import clear_credential
+
     clear_credential()
     console.print("[green]✅ 已退出登录[/green]")
 
@@ -134,6 +141,7 @@ def logout() -> None:
 def status(as_json: bool, as_yaml: bool) -> None:
     """查看当前登录状态"""
     from ..auth import get_credential, verify_credential_details
+
     cred = get_credential()
     if cred:
         cookie_names = sorted(cred.cookies.keys())
@@ -151,6 +159,7 @@ def status(as_json: bool, as_yaml: bool) -> None:
         elif as_yaml:
             try:
                 import yaml
+
                 click.echo(yaml.dump(data, allow_unicode=True))
             except ImportError:
                 click.echo(json.dumps(data, indent=2, ensure_ascii=False))
@@ -179,6 +188,7 @@ def status(as_json: bool, as_yaml: bool) -> None:
             data = {"authenticated": False, "credential_present": False}
             try:
                 import yaml
+
                 click.echo(yaml.dump(data, allow_unicode=True))
             except ImportError:
                 click.echo(json.dumps(data, indent=2, ensure_ascii=False))
@@ -200,9 +210,7 @@ def me(as_json: bool, as_yaml: bool) -> None:
         gender = "男" if info.get("gender") == 1 else "女" if info.get("gender") == 2 else "-"
 
         panel = Panel(
-            f"[bold]{name}[/bold]  {gender}  {age}\n"
-            f"学历: {degree}\n"
-            f"账号: {account}",
+            f"[bold]{name}[/bold]  {gender}  {age}\n学历: {degree}\n账号: {account}",
             title="👤 个人资料",
             border_style="cyan",
         )

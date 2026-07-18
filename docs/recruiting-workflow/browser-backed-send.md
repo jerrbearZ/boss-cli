@@ -65,7 +65,7 @@ Camoufox is preferred because plain Playwright/Chrome may be detected by Boss We
 - Camoufox may need its browser runtime downloaded before first live use:
 
 ```bash
-uv run python -m camoufox fetch
+uv run python -m boss_cli.camoufox_runtime install --smoke
 ```
 
 - The implementation has passed unit tests, a real-account dry run, and one live one-candidate send trial.

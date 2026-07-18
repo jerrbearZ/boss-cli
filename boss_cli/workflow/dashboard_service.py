@@ -28,6 +28,7 @@ class DashboardService:
             "automation": self.store.automation_summary(account_id=account_id),
             "delivery": self.store.delivery_summary(account_id=account_id),
             "daemon": self.store.get_daemon_state(),
+            "operator_required": self.store.get_operator_required(),
         }
 
     def candidates(self, *, limit: int = 200) -> list[dict[str, Any]]:

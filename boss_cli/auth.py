@@ -1,7 +1,7 @@
 """Authentication for Boss Zhipin.
 
 Strategy:
-1. Try loading saved credential from ~/.config/boss-cli/credential.json
+1. Try loading saved credential from the platform credential provider
 2. Try extracting cookies from local browsers via browser-cookie3
 3. Fallback: QR code login in terminal
 """
@@ -23,6 +23,7 @@ from typing import Any
 
 import httpx
 import qrcode
+from qrcode.constants import ERROR_CORRECT_L
 
 from boss_cli.constants import (
     AUTH_HEALTH_CACHE_TTL_S,
@@ -37,6 +38,8 @@ from boss_cli.constants import (
     QR_SCAN_LOGIN_URL,
     QR_SCAN_URL,
 )
+from boss_cli.platform import ensure_private_directory, ensure_private_file
+from boss_cli.secrets import SecretEnvelope, get_secret_provider, load_protected_envelope, supports_protected_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +53,7 @@ _AUTH_HEALTH_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 
 
 # ── Credential data class ───────────────────────────────────────────
+
 
 class Credential:
     """Holds Boss Zhipin session cookies."""
@@ -82,24 +86,41 @@ class Credential:
 
 # ── Credential persistence ──────────────────────────────────────────
 
+
 def save_credential(credential: Credential) -> None:
-    """Save credential to config file."""
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    """Save a credential to protected storage where the platform supports it."""
+    if supports_protected_secrets():
+        provider = get_secret_provider()
+        existing = provider.load()
+        provider.save(
+            SecretEnvelope(
+                dashscope_api_key=existing.dashscope_api_key,
+                boss_credential=credential.to_dict(),
+            )
+        )
+        logger.info("Credential saved to %s", provider.location)
+        return
+    ensure_private_directory(CONFIG_DIR)
     CREDENTIAL_FILE.write_text(json.dumps(credential.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
-    CREDENTIAL_FILE.chmod(0o600)
+    ensure_private_file(CREDENTIAL_FILE)
     logger.info("Credential saved to %s", CREDENTIAL_FILE)
 
 
-def load_credential() -> Credential | None:
+def load_credential(*, refresh_stale: bool = True) -> Credential | None:
     """Load credential from saved file with TTL-based auto-refresh.
 
     If saved cookies are older than 7 days, automatically attempt to
     refresh from the browser before falling back to stale cookies.
     """
-    if not CREDENTIAL_FILE.exists():
-        return None
     try:
-        data = json.loads(CREDENTIAL_FILE.read_text(encoding="utf-8"))
+        if supports_protected_secrets():
+            data = load_protected_envelope().boss_credential
+            if data is None:
+                return None
+        else:
+            if not CREDENTIAL_FILE.exists():
+                return None
+            data = json.loads(CREDENTIAL_FILE.read_text(encoding="utf-8"))
         cred = Credential.from_dict(data)
         if not cred.is_valid:
             return None
@@ -118,8 +139,9 @@ def load_credential() -> Credential | None:
             logger.debug("Credential missing __zp_stoken__ (JS-generated), continuing")
 
         # Check TTL — auto-refresh if stale
-        saved_at = data.get("saved_at", 0)
-        if saved_at and (time.time() - saved_at) > _CREDENTIAL_TTL_SECONDS:
+        saved_at_value = data.get("saved_at", 0)
+        saved_at = float(saved_at_value) if isinstance(saved_at_value, (int, float)) and not isinstance(saved_at_value, bool) else 0.0
+        if refresh_stale and saved_at and (time.time() - saved_at) > _CREDENTIAL_TTL_SECONDS:
             logger.info(
                 "Credential older than %d days, attempting browser refresh",
                 CREDENTIAL_TTL_DAYS,
@@ -133,13 +155,20 @@ def load_credential() -> Credential | None:
                 CREDENTIAL_TTL_DAYS,
             )
         return cred
-    except (json.JSONDecodeError, KeyError) as e:
+    except (json.JSONDecodeError, KeyError, OSError, TypeError) as e:
         logger.warning("Failed to load saved credential: %s", e)
     return None
 
 
 def clear_credential() -> None:
     """Remove saved credential file."""
+    if supports_protected_secrets():
+        provider = get_secret_provider()
+        existing = provider.load()
+        provider.save(SecretEnvelope(dashscope_api_key=existing.dashscope_api_key))
+        logger.info("Credential removed from %s", provider.location)
+        _AUTH_HEALTH_CACHE.clear()
+        return
     if CREDENTIAL_FILE.exists():
         CREDENTIAL_FILE.unlink()
         logger.info("Credential removed: %s", CREDENTIAL_FILE)
@@ -179,8 +208,8 @@ def _diagnose_extraction_issues(diagnostics: list[str]) -> str | None:
             )
         return (
             "macOS Keychain permission denied — your terminal is not authorized to read browser cookie encryption keys.\n"
-            "  Fix: Open Keychain Access → search for \"<Browser> Safe Storage\" → Access Control → add your Terminal app.\n"
-            "  Or click \"Always Allow\" when the Keychain authorization popup appears."
+            '  Fix: Open Keychain Access → search for "<Browser> Safe Storage" → Access Control → add your Terminal app.\n'
+            '  Or click "Always Allow" when the Keychain authorization popup appears.'
         )
     if sys.platform == "win32":
         return (
@@ -200,6 +229,7 @@ def _diagnose_extraction_issues(diagnostics: list[str]) -> str | None:
 
 # ── Environment variable fallback ───────────────────────────────────
 
+
 def load_from_env() -> Credential | None:
     """Load cookies from BOSS_COOKIES environment variable.
 
@@ -208,6 +238,11 @@ def load_from_env() -> Credential | None:
     raw = os.environ.get("BOSS_COOKIES", "").strip()
     if not raw:
         return None
+    return credential_from_cookie_header(raw)
+
+
+def credential_from_cookie_header(raw: str) -> Credential | None:
+    """Parse a Cookie header without logging or persisting its values."""
     cookies: dict[str, str] = {}
     for part in raw.split(";"):
         part = part.strip()
@@ -221,17 +256,35 @@ def load_from_env() -> Credential | None:
         logger.debug("BOSS_COOKIES env set but no valid key=value pairs found")
         return None
     cred = Credential(cookies=cookies)
-    logger.info("Loaded %d cookies from BOSS_COOKIES environment variable", len(cookies))
+    logger.info("Parsed a BOSS credential containing %d cookies", len(cookies))
     return cred
 
 
 # ── Browser cookie extraction ───────────────────────────────────────
 
-# Chromium-based browser base directories
-_CHROMIUM_BASE_DIRS: dict[str, str] = {
-    "chrome": os.path.join("Google", "Chrome"),
-    "edge": "Microsoft Edge",
-    "brave": os.path.join("BraveSoftware", "Brave-Browser"),
+# Chromium-based browser profile directories relative to each OS root.
+_CHROMIUM_BASE_DIRS: dict[str, dict[str, str]] = {
+    "darwin": {
+        "chrome": os.path.join("Google", "Chrome"),
+        "edge": "Microsoft Edge",
+        "brave": os.path.join("BraveSoftware", "Brave-Browser"),
+        "chromium": "Chromium",
+        "vivaldi": "Vivaldi",
+    },
+    "win32": {
+        "chrome": os.path.join("Google", "Chrome", "User Data"),
+        "edge": os.path.join("Microsoft", "Edge", "User Data"),
+        "brave": os.path.join("BraveSoftware", "Brave-Browser", "User Data"),
+        "chromium": os.path.join("Chromium", "User Data"),
+        "vivaldi": os.path.join("Vivaldi", "User Data"),
+    },
+    "linux": {
+        "chrome": "google-chrome",
+        "edge": "microsoft-edge",
+        "brave": os.path.join("BraveSoftware", "Brave-Browser"),
+        "chromium": "chromium",
+        "vivaldi": "vivaldi",
+    },
 }
 
 # Default browser order for extraction
@@ -251,22 +304,18 @@ def _get_browser_order(cookie_source: str | None = None) -> list[str]:
 
 def _iter_chrome_cookie_files(browser_name: str) -> list[str]:
     """Return cookie file paths for all Chrome profiles."""
-    base_dir = _CHROMIUM_BASE_DIRS.get(browser_name)
+    platform_key = sys.platform if sys.platform in {"darwin", "win32"} else "linux"
+    base_dir = _CHROMIUM_BASE_DIRS[platform_key].get(browser_name)
     if base_dir is None:
         return []
 
     if sys.platform == "darwin":
         root = os.path.join(os.path.expanduser("~"), "Library", "Application Support", base_dir)
     elif sys.platform == "win32":
-        if browser_name == "edge":
-            root = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "Edge", "User Data")
-        else:
-            root = os.path.join(os.environ.get("LOCALAPPDATA", ""), base_dir)
+        root = os.path.join(os.environ.get("LOCALAPPDATA", ""), base_dir)
     else:
-        if browser_name == "edge":
-            root = os.path.join(os.path.expanduser("~"), ".config", "microsoft-edge")
-        else:
-            root = os.path.join(os.path.expanduser("~"), ".config", base_dir)
+        config_home = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+        root = os.path.join(config_home, base_dir)
 
     if not os.path.isdir(root):
         return []
@@ -334,7 +383,8 @@ def _extract_in_process(cookie_source: str | None = None) -> tuple[Credential | 
         if fn is None:
             continue
 
-        if name in _CHROMIUM_BASE_DIRS:
+        platform_key = sys.platform if sys.platform in {"darwin", "win32"} else "linux"
+        if name in _CHROMIUM_BASE_DIRS[platform_key]:
             # Chromium-based: iterate all profiles
             cookie_files = _iter_chrome_cookie_files(name)
             if not cookie_files:
@@ -395,7 +445,7 @@ def _extract_via_subprocess(cookie_source: str | None = None) -> tuple[Credentia
 
     Returns (Credential | None, diagnostics_list).
     """
-    extract_script = '''
+    extract_script = """
 import glob, json, os, sys
 try:
     import browser_cookie3 as bc3
@@ -406,27 +456,41 @@ except ImportError:
 target = sys.argv[1] if len(sys.argv) > 1 else None
 
 CHROMIUM_BASE_DIRS = {
-    "chrome": os.path.join("Google", "Chrome"),
-    "edge": "Microsoft Edge",
-    "brave": os.path.join("BraveSoftware", "Brave-Browser"),
+    "darwin": {
+        "chrome": os.path.join("Google", "Chrome"),
+        "edge": "Microsoft Edge",
+        "brave": os.path.join("BraveSoftware", "Brave-Browser"),
+        "chromium": "Chromium",
+        "vivaldi": "Vivaldi",
+    },
+    "win32": {
+        "chrome": os.path.join("Google", "Chrome", "User Data"),
+        "edge": os.path.join("Microsoft", "Edge", "User Data"),
+        "brave": os.path.join("BraveSoftware", "Brave-Browser", "User Data"),
+        "chromium": os.path.join("Chromium", "User Data"),
+        "vivaldi": os.path.join("Vivaldi", "User Data"),
+    },
+    "linux": {
+        "chrome": "google-chrome",
+        "edge": "microsoft-edge",
+        "brave": os.path.join("BraveSoftware", "Brave-Browser"),
+        "chromium": "chromium",
+        "vivaldi": "vivaldi",
+    },
 }
 
 def iter_cookie_files(browser_name):
-    base_dir = CHROMIUM_BASE_DIRS.get(browser_name)
+    platform_key = sys.platform if sys.platform in {"darwin", "win32"} else "linux"
+    base_dir = CHROMIUM_BASE_DIRS[platform_key].get(browser_name)
     if base_dir is None:
         return []
     if sys.platform == "darwin":
         root = os.path.join(os.path.expanduser("~"), "Library", "Application Support", base_dir)
     elif sys.platform == "win32":
-        if browser_name == "edge":
-            root = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "Edge", "User Data")
-        else:
-            root = os.path.join(os.environ.get("LOCALAPPDATA", ""), base_dir)
+        root = os.path.join(os.environ.get("LOCALAPPDATA", ""), base_dir)
     else:
-        if browser_name == "edge":
-            root = os.path.join(os.path.expanduser("~"), ".config", "microsoft-edge")
-        else:
-            root = os.path.join(os.path.expanduser("~"), ".config", base_dir)
+        config_home = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+        root = os.path.join(config_home, base_dir)
     if not os.path.isdir(root):
         return []
     paths = []
@@ -459,7 +523,8 @@ if target:
 
 attempts = []
 for name, loader in browsers:
-    if name in CHROMIUM_BASE_DIRS:
+    platform_key = sys.platform if sys.platform in {"darwin", "win32"} else "linux"
+    if name in CHROMIUM_BASE_DIRS[platform_key]:
         cookie_files = iter_cookie_files(name)
         if not cookie_files:
             try:
@@ -495,7 +560,7 @@ for name, loader in browsers:
             attempts.append(f"{name}={type(exc).__name__}: {exc}")
 
 print(json.dumps({"error": "no_cookies", "attempts": attempts}))
-'''
+"""
 
     diagnostics: list[str] = []
     try:
@@ -595,6 +660,7 @@ def extract_browser_credential(cookie_source: str | None = None) -> tuple[Creden
 
 # ── QR Code terminal rendering ──────────────────────────────────────
 
+
 def _render_qr_half_blocks(matrix: list[list[bool]]) -> str:
     """Render QR matrix using Unicode half-block characters (▀▄█ and space).
 
@@ -645,7 +711,7 @@ def _display_qr_in_terminal(data: str) -> bool:
 
     Returns True on success.
     """
-    qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L)
+    qr = qrcode.QRCode(error_correction=ERROR_CORRECT_L)
     qr.add_data(data)
     qr.make(fit=True)
     modules = qr.get_matrix()
@@ -657,7 +723,7 @@ def _display_qr_in_terminal(data: str) -> bool:
 
     # Fallback to basic ASCII
     qr2 = qrcode.QRCode(
-        error_correction=qrcode.constants.ERROR_CORRECT_L,
+        error_correction=ERROR_CORRECT_L,
         box_size=1,
         border=1,
     )
@@ -705,8 +771,8 @@ async def _fetch_and_display_qr(client: httpx.AsyncClient, qr_id: str) -> None:
 
     # Also try terminal rendering — decode the image to find the encoded content
     try:
-        from PIL import Image
-        from pyzbar.pyzbar import decode as zbar_decode
+        from PIL import Image  # pyright: ignore[reportMissingImports] - optional QR preview support.
+        from pyzbar.pyzbar import decode as zbar_decode  # pyright: ignore[reportMissingImports] - optional QR preview support.
 
         img = Image.open(tmp.name)
         decoded = zbar_decode(img)
@@ -722,6 +788,7 @@ async def _fetch_and_display_qr(client: httpx.AsyncClient, qr_id: str) -> None:
 
 
 # ── QR Login flow ───────────────────────────────────────────────────
+
 
 async def _get_qr_session(client: httpx.AsyncClient) -> dict[str, str]:
     """Step 1: Get QR session (qrId, randKey, secretKey)."""
@@ -807,8 +874,7 @@ async def _dispatch_login(client: httpx.AsyncClient, qr_id: str) -> Credential:
             )
         else:
             raise RuntimeError(
-                "二维码登录未拿到完整的 Web 登录态，缺少关键 Cookie: "
-                f"{', '.join(missing)}。请先在浏览器完成登录后重新运行 boss login。"
+                f"二维码登录未拿到完整的 Web 登录态，缺少关键 Cookie: {', '.join(missing)}。请先在浏览器完成登录后重新运行 boss login。"
             )
 
     return credential
@@ -864,28 +930,30 @@ async def qr_login() -> Credential:
         # Step 5: Dispatch
         credential = await _dispatch_login(client, qr_id)
         save_credential(credential)
-        print("\n✅ 登录成功！凭证已保存到", CREDENTIAL_FILE)
+        location = get_secret_provider().location if supports_protected_secrets() else str(CREDENTIAL_FILE)
+        print("\n✅ 登录成功！凭证已保存到", location)
         return credential
 
 
 # ── Unified get_credential ──────────────────────────────────────────
 
+
 def get_credential() -> Credential | None:
     """Try all auth methods and return credential.
 
-    1. Saved credential file
-    2. Environment variable (BOSS_COOKIES)
+    1. Environment variable (BOSS_COOKIES, explicit process override)
+    2. Saved credential storage
     3. Browser cookie extraction
     """
-    cred = load_credential()
-    if cred:
-        logger.info("Loaded credential from %s", CREDENTIAL_FILE)
-        return cred
-
     cred = load_from_env()
     if cred:
         logger.info("Loaded credential from BOSS_COOKIES env")
-        save_credential(cred)
+        return cred
+
+    cred = load_credential()
+    if cred:
+        location = get_secret_provider().location if supports_protected_secrets() else str(CREDENTIAL_FILE)
+        logger.info("Loaded credential from %s", location)
         return cred
 
     cred, _ = extract_browser_credential()

@@ -20,10 +20,15 @@ import asyncio
 import logging
 import subprocess
 import sys
-from typing import Any
+from collections.abc import Callable, Mapping, Sequence
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from playwright.sync_api import Browser
 
 from .auth import Credential, qr_login, save_credential
 from .constants import BASE_URL
+from .platform import camoufox_os_name
 
 logger = logging.getLogger(__name__)
 
@@ -40,36 +45,30 @@ def _ensure_camoufox_ready() -> None:
     try:
         import camoufox  # noqa: F401
     except ImportError as exc:
-        raise BrowserLoginUnavailable(
-            "camoufox 未安装。安装: pip install 'kabi-boss-cli[browser]'"
-        ) from exc
+        raise BrowserLoginUnavailable("camoufox 未安装。安装: pip install 'kabi-boss-cli[browser]'") from exc
 
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "camoufox", "path"],
+            [sys.executable, "-m", "boss_cli.camoufox_runtime", "verify"],
             capture_output=True,
             text=True,
             timeout=15,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        raise BrowserLoginUnavailable(
-            "无法验证 Camoufox 浏览器安装状态。"
-        ) from exc
+        raise BrowserLoginUnavailable("无法验证 Camoufox 浏览器安装状态。") from exc
 
     if result.returncode != 0 or not result.stdout.strip():
-        raise BrowserLoginUnavailable(
-            "Camoufox 浏览器运行时缺失。运行: python -m camoufox fetch"
-        )
+        raise BrowserLoginUnavailable("Camoufox 浏览器运行时缺失。运行: python -m boss_cli.camoufox_runtime install --smoke")
 
 
-def _normalize_browser_cookies(raw_cookies: list[dict[str, Any]]) -> dict[str, str]:
+def _normalize_browser_cookies(raw_cookies: Sequence[Mapping[str, object]]) -> dict[str, str]:
     """Convert Playwright cookie entries into a flat dict, filtering to zhipin.com."""
     cookies: dict[str, str] = {}
     for entry in raw_cookies:
         name = entry.get("name")
         value = entry.get("value")
         domain = entry.get("domain", "")
-        if not isinstance(name, str) or not isinstance(value, str):
+        if not isinstance(name, str) or not isinstance(value, str) or not isinstance(domain, str):
             continue
         if not any(domain.endswith(d) for d in BROWSER_EXPORT_DOMAINS):
             continue
@@ -87,18 +86,27 @@ def _hydrate_stoken_via_browser(cookies: dict[str, str]) -> dict[str, str]:
     NOTE: This may fail if the anti-bot JS fingerprints the browser
     environment and refuses to generate the token.
     """
+    from camoufox import DefaultAddons
     from camoufox.sync_api import Camoufox
 
     playwright_cookies = []
     for name, value in cookies.items():
-        playwright_cookies.append({
-            "name": name,
-            "value": value,
-            "domain": ".zhipin.com",
-            "path": "/",
-        })
+        playwright_cookies.append(
+            {
+                "name": name,
+                "value": value,
+                "domain": ".zhipin.com",
+                "path": "/",
+            }
+        )
 
-    with Camoufox(headless=True) as browser:
+    with Camoufox(
+        headless=True,
+        persistent_context=False,
+        exclude_addons=[DefaultAddons.UBO],
+        os=camoufox_os_name(),
+    ) as launched:
+        browser = cast("Browser", launched)
         context = browser.new_context()
         context.add_cookies(playwright_cookies)
         page = context.new_page()
@@ -121,7 +129,7 @@ def _hydrate_stoken_via_browser(cookies: dict[str, str]) -> dict[str, str]:
 
 def browser_qr_login(
     *,
-    on_status: callable | None = None,
+    on_status: Callable[[str], None] | None = None,
 ) -> Credential:
     """Hybrid QR login: HTTP for session + Camoufox for __zp_stoken__.
 

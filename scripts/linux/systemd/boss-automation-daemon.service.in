@@ -1,0 +1,34 @@
+[Unit]
+Description=Boss recruiting automation daemon
+Wants=network-online.target
+After=network-online.target graphical-session.target
+PartOf=graphical-session.target
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+Environment=@XDG_CONFIG_ENV@
+Environment=@XDG_DATA_ENV@
+Environment=@XDG_STATE_ENV@
+Environment=@XDG_CACHE_ENV@
+ExecStartPre=@VALIDATE_SCRIPT@ --app-root @APP_ROOT@ --uv @UV@ --require-session --require-secrets
+ExecStart=@DAEMON_SCRIPT@ --app-root @APP_ROOT@ --uv @UV@
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=180
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=@CONFIG_ROOT@ @DATA_ROOT@ @STATE_ROOT@ @CAMOUFOX_CACHE_ROOT@
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=graphical-session.target

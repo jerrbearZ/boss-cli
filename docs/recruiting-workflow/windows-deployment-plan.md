@@ -1,10 +1,18 @@
 # Windows Automation Deployment Plan
 
-**Status:** Approved implementation blueprint; no Windows runtime changes have been made on this branch yet.
+**Status:** Repository implementation completed on this branch; target-PC commissioning and certification remain pending.
 
-**Planning branch:** `windows-automation-deployment`
+**Implementation branch:** `cross-platform-automation-deployment`
 
 **Prepared:** 2026-07-15
+
+## Implementation Status
+
+The repository portions of phases 1–4 are implemented: platform paths and API identity, current-user DPAPI
+secrets, schema 6 lifecycle/health controls, guarded SQLite backup/restore, dry-by-default deployment config,
+PowerShell Task Scheduler automation, Windows CI, tests, and the
+[operator runbook](./windows-operator-runbook.md). Phases 5–6 require the physical Windows PC, interactive BOSS
+account, approved canary, recovery drill, and supervised soak; this branch does not claim those external gates.
 
 ## Objective
 
@@ -293,7 +301,8 @@ mode runs only while the configured user is logged on, which matches the headful
 - Keep `uv.lock` committed and require `uv sync --locked --extra browser` for deployment.
 - Pin the supported Python minor version in `.python-version` after Windows validation.
 - Validate the exact locked Camoufox and Playwright versions on Windows before changing them.
-- Run `python -m camoufox fetch` during install and verify the resolved executable path.
+- Install the manifest-pinned Camoufox artifact with SHA-256 verification and pass a real browser-context smoke
+  test before registering tasks.
 - Do not silently upgrade Camoufox on the deployment PC; browser-runtime upgrades require a new canary.
 - Record app commit, Python, uv, Camoufox, browser binary, and schema versions in diagnostics.
 
@@ -336,7 +345,7 @@ Extend GitHub Actions with a `windows-latest` job:
 3. Run Ruff, the full non-live test suite, migrations, CLI help/smoke commands, and package build.
 4. Run Windows-only path, DPAPI round-trip, signal/control, and SQLite WAL tests.
 5. Parse all PowerShell scripts and run their validation-only paths.
-6. Import Camoufox and verify runtime discovery without performing a BOSS write.
+6. Verify the pinned Camoufox artifact digest and launch a blank browser context without performing a BOSS write.
 
 Live BOSS and WeChat tests must not run in public CI because they require a private interactive account and
 could send real actions.
@@ -352,7 +361,7 @@ Perform the following on the actual automation PC, in order:
 3. Store the replacement Alibaba key through the secret command; never reuse a key exposed in chat or logs.
 4. Log into BOSS and validate Chrome and Edge cookie extraction with the browser open and closed.
 5. Run all local tests and initialize the production database.
-6. Fetch Camoufox, launch it headfully, open BOSS Web, and perform a no-send target resolution.
+6. Verify the pinned Camoufox receipt, launch it headfully, open BOSS Web, and perform a no-send target resolution.
 7. Run three dry daemon cycles and verify lease, heartbeat, Qwen decisions, SQLite state, and dashboard health.
 8. Restart Windows, log in, and prove both tasks recover without duplicate daemon ownership.
 9. Test an unlocked console session, locked workstation, and disconnected RDP session. Record which states keep

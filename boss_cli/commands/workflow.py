@@ -15,9 +15,12 @@ from rich.table import Table
 
 from ..auth import Credential, load_from_env
 from ..client import BossClient
-from ..constants import CREDENTIAL_FILE
+from ..deployment import DeploymentConfigError, load_deployment_config
 from ..workflow import init_db
 from ..workflow.automation import AutomationConfig, run_automation_cycle, run_daemon
+from ..workflow.dashboard_service import DashboardService
+from ..workflow.health import HealthExitCode, evaluate_health
+from ..workflow.maintenance import MaintenanceError, create_backup, restore_backup
 from ..workflow.poller import sync_inbox
 from ..workflow.selector import (
     DEFAULT_DASHSCOPE_BASE_URL,
@@ -213,6 +216,13 @@ def _render_sync(data: dict[str, Any]) -> None:
 @workflow.command("daemon")
 @click.option("--db", "db_path", type=click.Path(dir_okay=False, path_type=Path), default=None, help="SQLite workflow database path")
 @click.option(
+    "--deployment-config",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    envvar="BOSS_DEPLOYMENT_CONFIG",
+    help="Validated deployment JSON; its safety settings override daemon flags.",
+)
+@click.option(
     "--model",
     default=DEFAULT_QWEN_MODEL,
     envvar="BOSS_LLM_MODEL",
@@ -227,8 +237,16 @@ def _render_sync(data: dict[str, Any]) -> None:
     help="Alibaba Model Studio OpenAI-compatible API base",
 )
 @click.option("--poll-interval", default=30.0, type=click.FloatRange(min=1), show_default=True, help="Seconds between inbox probes")
-@click.option("--error-backoff", default=120.0, type=click.FloatRange(min=1), show_default=True, help="Seconds to wait after a failed cycle")
-@click.option("--candidate-limit", default=20, type=click.IntRange(min=1), show_default=True, help="Maximum new inbound conversations decided per cycle")
+@click.option(
+    "--error-backoff", default=120.0, type=click.FloatRange(min=1), show_default=True, help="Seconds to wait after a failed cycle"
+)
+@click.option(
+    "--candidate-limit",
+    default=20,
+    type=click.IntRange(min=1),
+    show_default=True,
+    help="Maximum new inbound conversations decided per cycle",
+)
 @click.option(
     "--friend-id",
     type=click.IntRange(min=1),
@@ -239,7 +257,9 @@ def _render_sync(data: dict[str, Any]) -> None:
 @click.option("--action-delay", default=1.0, type=click.FloatRange(min=0), show_default=True, help="Delay between browser write actions")
 @click.option("--confidence-threshold", default=0.75, type=click.FloatRange(min=0, max=1), show_default=True)
 @click.option("--max-pages", default=3, type=click.IntRange(min=1), show_default=True, help="Maximum inbox pages read per probe")
-@click.option("--history-budget", default=20, type=click.IntRange(min=0), show_default=True, help="Maximum changed conversations enriched per probe")
+@click.option(
+    "--history-budget", default=20, type=click.IntRange(min=0), show_default=True, help="Maximum changed conversations enriched per probe"
+)
 @click.option("--request-wechat/--no-request-wechat", default=True, show_default=True)
 @click.option("--live", is_flag=True, help="Actually send approved replies and WeChat requests; default is decision-only dry mode")
 @click.option("--once", is_flag=True, help="Run exactly one cycle and exit")
@@ -247,6 +267,7 @@ def _render_sync(data: dict[str, Any]) -> None:
 @structured_output_options
 def daemon_command(
     db_path: Path | None,
+    deployment_config: Path | None,
     model: str,
     api_base: str,
     poll_interval: float,
@@ -268,6 +289,19 @@ def daemon_command(
     """Continuously probe the Boss inbox and select only approved replies."""
     if (as_json or as_yaml) and not once:
         raise click.ClickException("--json and --yaml require --once for daemon output")
+    if deployment_config:
+        try:
+            deployed = load_deployment_config(deployment_config)
+        except DeploymentConfigError as exc:
+            raise click.ClickException(str(exc)) from exc
+        model = deployed.model
+        poll_interval = float(deployed.poll_interval_seconds)
+        error_backoff = float(deployed.error_backoff_seconds)
+        candidate_limit = deployed.candidate_limit
+        max_actions = deployed.max_actions_per_cycle
+        action_delay = float(deployed.action_delay_seconds)
+        request_wechat = deployed.request_wechat
+        live = deployed.live
     try:
         selector = AlibabaQwenSelector(model=model, base_url=api_base)
     except ValueError as exc:
@@ -301,6 +335,10 @@ def daemon_command(
 
     try:
         with init_db(db_path) as store:
+
+            def _stop_requested() -> bool:
+                return stop_event.is_set() or store.is_daemon_stop_requested(config.daemon_name)
+
             def _cycle() -> dict[str, Any]:
                 def _with_client(client: BossClient) -> dict[str, Any]:
                     effective = client.credential if isinstance(client.credential, Credential) else credential
@@ -310,7 +348,7 @@ def daemon_command(
                         effective,
                         selector,
                         config,
-                        stop_requested=stop_event.is_set,
+                        stop_requested=_stop_requested,
                     )
                     if not once and sys.stdout.isatty():
                         console.print(
@@ -329,7 +367,7 @@ def daemon_command(
         for signum, previous in previous_handlers.items():
             signal.signal(signum, previous)
 
-    if result["failures"]:
+    if once and result["failures"]:
         raise click.ClickException(f"automation cycle failed: {result['last_result'].get('error_code')}")
     if as_json or as_yaml or not sys.stdout.isatty():
         _output_structured(result, as_json=as_json, as_yaml=as_yaml)
@@ -351,6 +389,154 @@ def daemon_status_command(db_path: Path | None, as_json: bool, as_yaml: bool) ->
         _output_structured(data, as_json=as_json, as_yaml=as_yaml)
         return
     console.print(f"status={data.get('status')} heartbeat={data.get('heartbeat_at') or '-'}")
+
+
+@workflow.command("daemon-stop")
+@click.option("--db", "db_path", type=click.Path(dir_okay=False, path_type=Path), default=None)
+@click.option("--reason", default="operator", help="Non-sensitive operational reason.")
+@structured_output_options
+def daemon_stop_command(db_path: Path | None, reason: str, as_json: bool, as_yaml: bool) -> None:
+    """Persist a graceful stop request for the daemon."""
+    with init_db(db_path) as store:
+        request = store.request_daemon_stop(reason=reason)
+        data = {"daemon_name": "primary", **request}
+    if as_json or as_yaml or not sys.stdout.isatty():
+        _output_structured(data, as_json=as_json, as_yaml=as_yaml)
+    else:
+        console.print(f"[yellow]Daemon stop requested at {data['requested_at']}.[/yellow]")
+
+
+@workflow.command("daemon-start")
+@click.option("--db", "db_path", type=click.Path(dir_okay=False, path_type=Path), default=None)
+def daemon_start_command(db_path: Path | None) -> None:
+    """Clear a prior durable stop request immediately before a controlled start."""
+    with init_db(db_path) as store:
+        store.clear_daemon_stop()
+    console.print("[green]Daemon stop request cleared.[/green]")
+
+
+@workflow.command("daemon-force-release")
+@click.option("--db", "db_path", type=click.Path(dir_okay=False, path_type=Path), default=None)
+@click.option("--yes", is_flag=True, help="Confirm that the supervisor has terminated the daemon process.")
+@structured_output_options
+def daemon_force_release_command(db_path: Path | None, yes: bool, as_json: bool, as_yaml: bool) -> None:
+    """Release a force-stopped lease and move uncertain actions to review."""
+    if not yes:
+        raise click.ClickException("--yes is required after confirming the daemon process is terminated")
+    with init_db(db_path) as store:
+        review_count = store.force_release_daemon()
+        data = {"daemon_name": "primary", "status": "forced_stopped", "actions_moved_to_review": review_count}
+    if as_json or as_yaml or not sys.stdout.isatty():
+        _output_structured(data, as_json=as_json, as_yaml=as_yaml)
+    else:
+        console.print(f"[yellow]Forced lease released; actions moved to review: {review_count}.[/yellow]")
+
+
+@workflow.command("pause")
+@click.option("--db", "db_path", type=click.Path(dir_okay=False, path_type=Path), default=None)
+@click.option("--reason", default="operator", help="Non-sensitive operational reason.")
+def pause_command(db_path: Path | None, reason: str) -> None:
+    """Pause selection and sending while leaving inbox synchronization enabled."""
+    with init_db(db_path) as store:
+        DashboardService(store).pause(reason=reason)
+    console.print("[yellow]Automation paused.[/yellow]")
+
+
+@workflow.command("resume")
+@click.option("--db", "db_path", type=click.Path(dir_okay=False, path_type=Path), default=None)
+def resume_command(db_path: Path | None) -> None:
+    """Resume selection and sending after operator review."""
+    with init_db(db_path) as store:
+        operator_required = store.get_operator_required()
+        if operator_required and operator_required.get("code") == "not_authenticated":
+            from ..auth import load_credential, verify_credential_details
+
+            credential = load_from_env() or load_credential(refresh_stale=False)
+            if credential is None:
+                raise click.ClickException("Run boss login before clearing the authentication failure")
+            health = verify_credential_details(credential, force_refresh=True)
+            if not health.get("authenticated"):
+                raise click.ClickException("BOSS authentication is still unhealthy; run boss login again")
+            store.clear_operator_required()
+        elif operator_required:
+            raise click.ClickException("Resolve the operator-required condition before resuming")
+        DashboardService(store).resume()
+    console.print("[green]Automation resumed.[/green]")
+
+
+@workflow.command("healthcheck")
+@click.option("--db", "db_path", type=click.Path(dir_okay=False, path_type=Path), default=None)
+@click.option("--max-age", default=120.0, type=click.FloatRange(min=1), show_default=True)
+@structured_output_options
+def healthcheck_command(db_path: Path | None, max_age: float, as_json: bool, as_yaml: bool) -> None:
+    """Return stable process exit codes for scheduler and operator monitoring."""
+    try:
+        with init_db(db_path) as store:
+            code, data = evaluate_health(store, max_age_seconds=max_age)
+    except Exception as exc:  # noqa: BLE001 - convert database failures to a stable process code.
+        code = HealthExitCode.DATABASE_FAILURE
+        data = {
+            "status": "database_failure",
+            "exit_code": int(code),
+            "error_code": type(exc).__name__,
+            "db": str(db_path) if db_path else None,
+        }
+    if as_json or as_yaml or not sys.stdout.isatty():
+        _output_structured(data, as_json=as_json, as_yaml=as_yaml)
+    else:
+        console.print(f"status={data['status']} exit_code={int(code)} heartbeat={data.get('heartbeat_at') or '-'}")
+    if code != HealthExitCode.HEALTHY:
+        raise SystemExit(int(code))
+
+
+@workflow.command("backup")
+@click.option("--db", "db_path", type=click.Path(dir_okay=False, path_type=Path), default=None)
+@click.option("--destination", type=click.Path(dir_okay=False, path_type=Path), default=None)
+@click.option("--kind", type=click.Choice(["daily", "pre-update", "manual"]), default="manual", show_default=True)
+@click.option("--retention", type=click.IntRange(min=0), default=None)
+@structured_output_options
+def backup_command(
+    db_path: Path | None,
+    destination: Path | None,
+    kind: str,
+    retention: int | None,
+    as_json: bool,
+    as_yaml: bool,
+) -> None:
+    """Create an online-consistent SQLite backup and apply bounded retention."""
+    try:
+        data = create_backup(db_path, destination=destination, kind=kind, retention=retention)
+    except MaintenanceError as exc:
+        raise click.ClickException(str(exc)) from exc
+    if as_json or as_yaml or not sys.stdout.isatty():
+        _output_structured(data, as_json=as_json, as_yaml=as_yaml)
+    else:
+        console.print(f"[green]Backup verified:[/green] {data['backup']}")
+
+
+@workflow.command("restore")
+@click.option("--db", "db_path", type=click.Path(dir_okay=False, path_type=Path), default=None)
+@click.option("--backup", "backup_path", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--yes", is_flag=True, help="Confirm replacement while preserving the current database.")
+@structured_output_options
+def restore_command(
+    db_path: Path | None,
+    backup_path: Path,
+    yes: bool,
+    as_json: bool,
+    as_yaml: bool,
+) -> None:
+    """Restore a verified backup only after daemon ownership is released."""
+    if not yes and not click.confirm("Restore this backup and preserve the current database?"):
+        raise click.Abort()
+    try:
+        data = restore_backup(backup_path, db_path)
+    except MaintenanceError as exc:
+        raise click.ClickException(str(exc)) from exc
+    if as_json or as_yaml or not sys.stdout.isatty():
+        _output_structured(data, as_json=as_json, as_yaml=as_yaml)
+    else:
+        console.print(f"[green]Database restored and verified:[/green] {data['db']}")
 
 
 @workflow.command("dry-run")
@@ -432,7 +618,7 @@ def _get_workflow_credential(*, allow_browser_auth: bool, as_json: bool, as_yaml
     if allow_browser_auth:
         return require_auth()
 
-    cred = _load_saved_credential_no_refresh() or load_from_env()
+    cred = load_from_env() or _load_saved_credential_no_refresh()
     if cred:
         return cred
 
@@ -466,14 +652,9 @@ def _get_workflow_credential(*, allow_browser_auth: bool, as_json: bool, as_yaml
 
 def _load_saved_credential_no_refresh() -> Credential | None:
     """Load saved credential without the auth module's browser refresh fallback."""
-    if not CREDENTIAL_FILE.exists():
-        return None
-    try:
-        data = json.loads(CREDENTIAL_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    cred = Credential.from_dict(data)
-    return cred if cred.is_valid else None
+    from ..auth import load_credential
+
+    return load_credential(refresh_stale=False)
 
 
 def _run_boss_dry_run(
@@ -711,12 +892,7 @@ def _last_message_preview(last_message: dict[str, Any]) -> str:
 
 
 def _extract_encrypt_geek_id(detail: dict[str, Any]) -> str:
-    return str(
-        detail.get("encryptGeekId")
-        or detail.get("encryptUid")
-        or detail.get("encryptFriendId")
-        or ""
-    )
+    return str(detail.get("encryptGeekId") or detail.get("encryptUid") or detail.get("encryptFriendId") or "")
 
 
 def _as_str_list(value: Any) -> list[str]:

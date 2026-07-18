@@ -13,24 +13,30 @@ Usage:
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import click
 
 from . import __version__
-from .commands import auth, dashboard, personal, recruiter, search, social, workflow
+from .commands import auth, dashboard, deployment, personal, recruiter, search, secrets, social, workflow
 
 
 @click.group()
 @click.version_option(version=__version__, prog_name="boss")
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose logging (show request URLs, timing)")
+@click.option("--log-file", type=click.Path(path_type=Path, dir_okay=False), envvar="BOSS_LOG_FILE", hidden=True)
 @click.pass_context
-def cli(ctx, verbose: bool) -> None:
+def cli(ctx, verbose: bool, log_file: Path | None) -> None:
     """Boss CLI — 在终端使用 BOSS 直聘 🤝"""
     ctx.ensure_object(dict)
     if verbose:
         logging.basicConfig(level=logging.INFO, format="%(name)s %(message)s")
     else:
         logging.basicConfig(level=logging.WARNING)
+    if log_file:
+        from .logging_utils import configure_rotating_file_logging
+
+        configure_rotating_file_logging(log_file, verbose=verbose)
 
 
 # ─── Auth commands ───────────────────────────────────────────────────
@@ -39,6 +45,8 @@ cli.add_command(auth.login)
 cli.add_command(auth.logout)
 cli.add_command(auth.status)
 cli.add_command(auth.me)
+cli.add_command(secrets.secrets_group)
+cli.add_command(deployment.deployment_group)
 
 # ─── Search & Browse commands ────────────────────────────────────────
 
